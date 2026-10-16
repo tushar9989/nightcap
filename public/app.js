@@ -341,7 +341,7 @@ function renderSettings() {
       toggle('Skip intros automatically', 'Otherwise a Skip Intro button appears during the intro.', 'autoSkipIntro'),
       toggle('Autoplay next episode', 'When the end credits start, count down and play the next episode.', 'autoplayNext'),
       h('div', { class: 'setting' }, h('div', {}, h('div', {}, 'Next episode countdown')), h('div', { class: 'select' }, countdown)),
-      h('div', { class: 'setting' }, h('div', {}, h('div', {}, 'Keyboard'), h('div', { class: 'desc' }, 'Space play/pause · ←/→ 10 s · ↑/↓ volume up to 200% · S skip intro · N next episode · C subtitles · F full screen · M mute')))),
+      h('div', { class: 'setting' }, h('div', {}, h('div', {}, 'Keyboard'), h('div', { class: 'desc' }, 'Space play/pause · ←/→ 10 s · ↑/↓ volume up to 200% · [ ] speed ({ } fine, = normal) · S skip intro · N next episode · C subtitles · F full screen · M mute')))),
     h('section', { class: 'section' },
       h('h2', {}, 'Engine'),
       h('p', {}, lib.ffmpeg

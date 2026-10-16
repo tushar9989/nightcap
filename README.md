@@ -21,8 +21,10 @@ using intro/credits detection that runs entirely on your machine.
   MKV with AC3/DTS, 10-bit H.264…) are repackaged or converted on the fly by
   ffmpeg, using the Mac's hardware encoder. Seeking works either way.
 - **Volume up to 200%** (like VLC), with a limiter so boosted audio doesn't clip harshly.
+- **Playback speed 0.25×–3×** with pitch-corrected voices, remembered across
+  episodes; the speed button shows when you are not at 1×.
 - Subtitles (`.srt`/`.vtt`/`.ass` next to the video, or embedded text tracks),
-  audio-track switching, playback speed, media keys / Now Playing, full screen.
+  audio-track switching, media keys / Now Playing, full screen.
 
 ## Requirements
 
@@ -93,7 +95,8 @@ on a network you trust). `PORT` and `DATA_DIR` can be set the same way.
 
 ## Keyboard
 
-Space play/pause · ←/→ 10 s (Shift: 30 s) · ↑/↓ volume (to 200%) · M mute ·
+Space play/pause · ←/→ 10 s (Shift: 30 s) · ↑/↓ volume (to 200%) ·
+`[` / `]` speed −/+ 0.25× (`{` / `}` fine 0.05×, `=` normal) · M mute ·
 F full screen · S skip intro · N next episode · C subtitles · 0–9 jump to 0–90% ·
 Esc back. In the library: `/` to search.
 

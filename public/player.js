@@ -8,7 +8,10 @@ import { state, api, h, ic, artBox, fmtTime, toast, loc, fileOf, progressOf, epC
 const MAX_VOLUME = 2; // 200%, like VLC
 const SAVE_EVERY_MS = 5000;
 const HIDE_AFTER_MS = 3000;
-const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const SPEED_STOPS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+const MIN_SPEED = 0.25;
+const MAX_SPEED = 3; // browsers mute audio above 4x
+const fmtSpeed = (s) => `${+s.toFixed(2)}×`;
 
 const store = {
   get(k, d) {
@@ -118,7 +121,7 @@ export class Player {
     this.fid = null;
     this.volume = Math.min(MAX_VOLUME, store.get('volume', 1));
     this.muted = store.get('muted', false);
-    this.speed = 1;
+    this.speed = Math.min(MAX_SPEED, Math.max(MIN_SPEED, Number(store.get('speed', 1)) || 1));
   }
 
   get isOpen() {
@@ -145,6 +148,8 @@ export class Player {
       this.stopMedia();
     }
     this.fid = fid;
+    this.info = null;
+    this.mode = null;
     this.resetEpisodeState();
     this.root.hidden = false;
     document.body.classList.add('no-scroll');
@@ -248,7 +253,7 @@ export class Player {
       this.offset = at;
       v.src = this.streamUrl(at);
     }
-    v.playbackRate = this.speed;
+    this.applySpeed();
     this.applyVolume();
     v.play().catch(() => {});
   }
@@ -278,6 +283,7 @@ export class Player {
   }
 
   seek(t) {
+    if (!this.info || this.mode == null) return; // still opening
     const dur = this.duration;
     t = Math.max(0, dur ? Math.min(t, dur - 0.25) : t);
     this.nextDismissed = this.nextDismissed && t >= (this.markers.credits?.start ?? Infinity);
@@ -375,6 +381,34 @@ export class Player {
     store.set('muted', this.muted);
     this.applyVolume();
     this.osd(this.muted ? 'Muted' : `Volume ${Math.round(this.volume * 100)}%`);
+  }
+
+  // ---- speed (0.25x..3x, remembered) ---------------------------------------------------
+
+  applySpeed() {
+    const v = this.video;
+    // defaultPlaybackRate survives the reload that each stream restart does.
+    v.defaultPlaybackRate = this.speed;
+    v.playbackRate = this.speed;
+    v.preservesPitch = true; // faster, but voices keep their pitch
+    if (this.speedLabel) {
+      this.speedLabel.textContent = this.speed === 1 ? '' : fmtSpeed(this.speed);
+      this.speedBtn.classList.toggle('on', this.speed !== 1);
+    }
+  }
+
+  setSpeed(speed, { osd = false } = {}) {
+    this.speed = Math.round(Math.min(MAX_SPEED, Math.max(MIN_SPEED, speed)) * 100) / 100;
+    store.set('speed', this.speed);
+    this.applySpeed();
+    if (osd) this.osd(this.speed === 1 ? 'Normal speed' : `Speed ${fmtSpeed(this.speed)}`);
+    if (this.panelOpen === 'speed') this.renderPanel();
+  }
+
+  // Step to the next multiple of `step` in either direction.
+  stepSpeed(dir, step) {
+    const base = dir > 0 ? Math.floor(this.speed / step + 1e-6) : Math.ceil(this.speed / step - 1e-6);
+    this.setSpeed((base + dir) * step, { osd: true });
   }
 
   // ---- progress ------------------------------------------------------------------------
@@ -704,6 +738,7 @@ export class Player {
     this.panelEl.hidden = false;
     this.panelEl.className = 'panel';
     if (this.panelOpen === 'episodes') return this.renderEpisodesPanel();
+    if (this.panelOpen === 'speed') return this.renderSpeedPanel();
 
     const opt = (label, on, fn) => h('button', { class: `opt${on ? ' on' : ''}`, onclick: fn }, label);
     const cols = [];
@@ -719,12 +754,6 @@ export class Player {
     cols.push(h('div', { class: 'col' }, h('h4', {}, 'Subtitles'),
       opt('Off', !this.subId, () => this.selectSubtitle(null)),
       this.info.subtitles.map((s) => opt(s.label, s.id === this.subId, () => this.selectSubtitle(s.id)))));
-    cols.push(h('div', { class: 'col' }, h('h4', {}, 'Speed'),
-      SPEEDS.map((s) => opt(s === 1 ? 'Normal' : `${s}×`, s === this.speed, () => {
-        this.speed = s;
-        this.video.playbackRate = s;
-        this.renderPanel();
-      }))));
 
     const m = this.markers;
     const now = () => Math.round(this.time * 10) / 10;
@@ -744,6 +773,17 @@ export class Player {
         h('button', { onclick: () => this.setMarkers({ intro: null }, 'Intro cleared') }, 'No intro in this episode'),
         m.manual ? h('button', { onclick: () => this.setMarkers({ reset: true }, 'Back to detected markers') }, 'Use detected markers') : null)));
     this.panelEl.replaceChildren(h('div', { class: 'cols' }, cols));
+  }
+
+  renderSpeedPanel() {
+    this.panelEl.className = 'panel speed-panel';
+    const stops = SPEED_STOPS.includes(this.speed) ? SPEED_STOPS : [...SPEED_STOPS, this.speed].sort((a, b) => a - b);
+    this.panelEl.replaceChildren(
+      h('h4', {}, 'Playback speed'),
+      h('div', { class: 'speed-stops', role: 'radiogroup', 'aria-label': 'Playback speed' },
+        stops.map((sp) => h('button', { class: `stop${sp === this.speed ? ' on' : ''}`, role: 'radio', 'aria-checked': String(sp === this.speed), onclick: () => this.setSpeed(sp) },
+          h('i'), h('span', {}, fmtSpeed(sp)), sp === 1 ? h('small', {}, 'Normal') : null))),
+      h('p', { class: 'muted' }, '[ slower · ] faster · { } fine steps · = normal. Voices keep their pitch.'));
   }
 
   renderEpisodesPanel() {
@@ -849,6 +889,8 @@ export class Player {
     this.nextBtn = h('button', { class: 'p-btn sm', title: 'Next episode (N)', onclick: () => this.playNext() }, ic('next'));
     this.epsBtn = h('button', { class: 'p-btn sm', title: 'Episodes', onclick: () => this.togglePanel('episodes') }, ic('episodes'));
     this.fsBtn = h('button', { class: 'p-btn sm', title: 'Full screen (F)', onclick: () => this.toggleFullscreen() }, ic('fullscreen'));
+    this.speedLabel = h('span', { class: 'speed-badge' });
+    this.speedBtn = h('button', { class: 'p-btn sm speed-btn', title: 'Playback speed ([ and ])', onclick: () => this.togglePanel('speed') }, ic('speed'), this.speedLabel);
 
     const top = h('div', { class: 'p-top' },
       h('button', { class: 'p-btn', title: 'Back (Esc)', onclick: () => this.exit() }, ic('back')),
@@ -864,7 +906,8 @@ export class Player {
         this.timeEl,
         this.nextBtn,
         this.epsBtn,
-        h('button', { class: 'p-btn sm', title: 'Audio, subtitles, speed, intro markers', onclick: () => this.togglePanel('settings') }, ic('subtitles')),
+        this.speedBtn,
+        h('button', { class: 'p-btn sm', title: 'Audio, subtitles, intro markers', onclick: () => this.togglePanel('settings') }, ic('subtitles')),
         this.fsBtn));
     for (const bar of [top, bottom]) {
       bar.addEventListener('mouseenter', () => (this.hoveringControls = true));
@@ -925,6 +968,7 @@ export class Player {
     document.addEventListener('visibilitychange', () => document.hidden && this.saveProgress(true));
     window.addEventListener('pagehide', () => this.saveProgress(true));
     this.applyVolume();
+    this.applySpeed();
   }
 
   skipIntro() {
@@ -947,6 +991,11 @@ export class Player {
     else if (k === 'ArrowRight' || k === 'l') { handled(); this.seek(this.time + (e.shiftKey ? 30 : 10)); }
     else if (k === 'ArrowUp') { handled(); this.setVolume(this.volume + 0.05, { osd: true }); }
     else if (k === 'ArrowDown') { handled(); this.setVolume(this.volume - 0.05, { osd: true }); }
+    else if (k === ']' || k === '>') { handled(); this.stepSpeed(1, 0.25); }
+    else if (k === '[' || k === '<') { handled(); this.stepSpeed(-1, 0.25); }
+    else if (k === '}') { handled(); this.stepSpeed(1, 0.05); }
+    else if (k === '{') { handled(); this.stepSpeed(-1, 0.05); }
+    else if (k === '=') { handled(); this.setSpeed(1, { osd: true }); }
     else if (k === 'm' || k === 'M') { handled(); this.toggleMute(); }
     else if (k === 'f' || k === 'F') { handled(); this.toggleFullscreen(); }
     else if ((k === 's' || k === 'S') && !this.skipBtn.hidden) { handled(); this.skipIntro(); }
