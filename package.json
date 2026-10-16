@@ -2,7 +2,7 @@
   "name": "local-netflix",
   "version": "0.1.0",
   "private": true,
-  "description": "A local, Netflix-style player for your own movie and TV folders, with on-device intro and credits detection.",
+  "description": "A player for the films and shows on your own Mac, with skip intro, next episode, previews and subtitles, all worked out on your machine.",
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {

@@ -1,9 +1,11 @@
 # Marquee
 
-A Netflix-style app for the movies and TV shows on your own disks. Point it at
-folders; it works out shows, seasons and movies, remembers where you stopped,
-plays episode after episode, and shows **Skip Intro** and **Next Episode**
-using intro/credits detection that runs entirely on your machine.
+A player for the films and shows on your own Mac, with the conveniences of
+streaming apps. Point it at folders; it works out shows, seasons and movies,
+remembers where you stopped, plays episode after episode, and shows
+**Skip Intro** and **Next Episode** using intro/credits detection that runs
+entirely on your machine. A sidebar lists what you're watching and your
+shows and movies; each title has its own page with seasons and episodes.
 
 ## Features
 
@@ -12,8 +14,8 @@ using intro/credits detection that runs entirely on your machine.
   `Show Season 01 Episode 02 - Title`, `1x02`, `[Group] Show - 02`) are parsed;
   films and `Extras` inside a show folder are handled; split shows across
   drives are merged. Rescans every 15 minutes.
-- **Resume like Netflix** – progress is saved every few seconds and on pause;
-  *Continue Watching* resumes the episode in progress or the next one.
+- **Resume** – progress is saved every few seconds and on pause; *Watching*
+  resumes the episode in progress or the next one.
 - **Skip Intro / Next Episode** – detected per episode (see below), with a
   countdown into the next episode at the end credits, optional auto-skip, and
   per-episode manual corrections from the player menu.
@@ -24,7 +26,8 @@ using intro/credits detection that runs entirely on your machine.
   instant; only longer jumps start a new conversion (well under a second).
 - **Previews** – thumbnails above the seek bar while you scrub, episodes that
   play a slideshow of themselves when you rest the pointer on them (title
-  page and the player's episode list), and an animated Next Episode card.
+  pages, Watching and the player's episode list), and an animated Next
+  Episode card.
   In the player, resting on Next shows the next episode playing its preview,
   and resting on Episodes or Subtitles opens that menu (a click keeps it open).
   Made locally from keyframes, about a second and 2 MB per episode.

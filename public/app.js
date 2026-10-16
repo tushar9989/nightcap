@@ -5,15 +5,17 @@ import {
 import { Player } from './player.js';
 
 const view = document.getElementById('view');
-const modalRoot = document.getElementById('modal-root');
-const nav = document.getElementById('nav');
+const sideNav = document.getElementById('side-nav');
 const searchInput = document.getElementById('search-input');
 const activity = document.getElementById('activity');
 const player = new Player(document.getElementById('player-root'));
 
-const page = { base: null, query: '', scroll: {} };
+// key: which page is showing ('home', 'shows', 'title:<id>', …), for redraws and the sidebar.
+const page = { key: null, base: null, query: '' };
 
-// ---- Cards & rows -------------------------------------------------------------
+const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+
+// ---- Pieces --------------------------------------------------------------------------
 
 function titleMeta(t) {
   const parts = [];
@@ -28,139 +30,41 @@ function titleMeta(t) {
   return parts.join(' · ');
 }
 
-function titleCard(t, { nu = null, removable = false } = {}) {
-  const art = artBox(`/api/art/title/${t.id}?type=card&w=480`, t.name);
-  const sub = nu ? `${t.kind === 'show' ? `${epCode(nu.fileId)} · ${fileOf(nu.fileId).name}` : nu.resume ? `${fmtTime(fileOf(nu.fileId).duration - nu.start)} left` : ''}` : titleMeta(t);
-  if (nu) {
-    art.append(h('div', { class: 'play-hint' }, ic('play')));
-    const p = progressOf(nu.fileId);
-    if (nu.resume && p?.duration) art.append(h('div', { class: 'bar' }, h('i', { style: { width: `${(p.position / p.duration) * 100}%` } })));
-  }
-  const isNew = !nu && Date.now() - t.addedAt < 7 * 864e5;
-  const el = h('a', { class: 'card', href: nu ? watchUrl(nu.fileId, nu.start) : `#/title/${t.id}`, title: t.name },
+const progressBar = (p) => h('div', { class: 'bar' }, h('i', { style: { width: `${p.watched ? 100 : (p.position / p.duration) * 100}%` } }));
+
+// A title in a grid: its picture, with the name and details underneath.
+function titleTile(t) {
+  return h('a', { class: 'tile', href: `#/title/${t.id}`, title: t.name },
+    artBox(`/api/art/title/${t.id}?type=card&w=480`, t.name),
+    h('div', { class: 'tile-text' }, h('b', {}, t.name), h('span', {}, titleMeta(t))));
+}
+
+// Something you are watching: plays from where you stopped; resting on it previews it.
+function watchingTile({ t, nu }) {
+  const f = fileOf(nu.fileId);
+  const p = progressOf(nu.fileId);
+  const art = artBox(`/api/art/file/${nu.fileId}?w=640`, f.name);
+  art.append(h('div', { class: 'play-hint' }, ic('play')));
+  if (nu.resume && p?.duration) art.append(progressBar(p));
+  const left = nu.resume && f.duration ? `${fmtDur(f.duration - nu.start)} left` : 'Up next';
+  const el = h('a', { class: 'tile watching', href: watchUrl(nu.fileId, nu.start), title: `${nu.resume ? 'Resume' : 'Play'} ${f.name}` },
     art,
-    isNew ? h('span', { class: 'badge-new' }, 'NEW') : null,
-    h('div', { class: 'label' }, t.name, sub ? h('small', {}, sub) : null),
-    removable ? h('button', { class: 'card-x', title: 'Remove from Continue Watching', onclick: async (e) => {
+    h('div', { class: 'tile-text' },
+      h('b', {}, t.name),
+      h('span', {}, t.kind === 'show' ? `${epCode(nu.fileId)} · ${f.name}` : left),
+      t.kind === 'show' ? h('span', { class: 'dim' }, left) : null),
+    h('button', { class: 'tile-x', title: 'Remove from Watching', onclick: async (e) => {
       e.preventDefault();
       e.stopPropagation();
       const r = await api.post('/api/hide', { titleId: t.id });
       state.lib.hidden = r.hidden;
-      el.remove();
-    } }, ic('close')) : null);
+      route(true);
+    } }, ic('close')));
+  previewOnHover(art, nu.fileId, el);
   return el;
 }
 
-function row(title, cards) {
-  if (!cards.length) return null;
-  const track = h('div', { class: 'track' }, cards);
-  const left = h('button', { class: 'arrow left', 'aria-label': 'Scroll left', disabled: true }, ic('chevL'));
-  const right = h('button', { class: 'arrow right', 'aria-label': 'Scroll right' }, ic('chevR'));
-  const sync = () => {
-    left.disabled = track.scrollLeft < 8;
-    right.disabled = track.scrollLeft + track.clientWidth >= track.scrollWidth - 8;
-  };
-  left.onclick = () => track.scrollBy({ left: -track.clientWidth * 0.9, behavior: 'smooth' });
-  right.onclick = () => track.scrollBy({ left: track.clientWidth * 0.9, behavior: 'smooth' });
-  track.addEventListener('scroll', sync, { passive: true });
-  requestAnimationFrame(sync);
-  return h('section', { class: 'row' }, h('h2', {}, title), h('div', { class: 'slider' }, left, track, right));
-}
-
-// ---- Pages --------------------------------------------------------------------
-
-function renderWelcome() {
-  view.replaceChildren(h('div', { class: 'welcome' }, h('div', {},
-    h('h1', {}, 'Your movies and shows, on your Mac'),
-    h('p', {}, 'Add the folders where your movies and TV series live. Season folders become seasons, playback resumes where you left off, and intros and end credits are detected on your machine so you can skip them.'),
-    h('button', { class: 'btn btn-accent', onclick: () => openPicker() }, ic('plus'), 'Add a folder'))));
-}
-
-function hero(t) {
-  const nu = nextUp(t);
-  const art = h('div', { class: 'hero-art' });
-  const img = new Image();
-  img.onload = () => (art.style.backgroundImage = `url("${img.src}")`);
-  img.src = `/api/art/title/${t.id}?type=backdrop&w=1280`;
-  const f = fileOf(nu.fileId);
-  return h('section', { class: 'hero' }, art, h('div', { class: 'hero-body' },
-    h('h1', {}, t.name),
-    h('div', { class: 'meta' }, titleMeta(t)),
-    t.kind === 'show' && !nu.fresh ? h('div', { class: 'up-next' }, h('b', {}, nu.resume ? 'Continue' : 'Up next'), `${epCode(nu.fileId)} · ${f.name}`) : null,
-    h('div', { class: 'btns' },
-      h('a', { class: 'btn btn-play', href: watchUrl(nu.fileId, nu.start) }, ic('play'), nu.resume ? 'Resume' : 'Play'),
-      h('a', { class: 'btn btn-ghost', href: `#/title/${t.id}` }, ic('info'), 'More Info'))));
-}
-
-function renderHome() {
-  const lib = state.lib;
-  if (!lib.folders.length) return renderWelcome();
-  if (!lib.titles.length) {
-    view.replaceChildren(h('div', { class: 'welcome' }, h('div', {},
-      h('h1', {}, lib.scanning ? 'Scanning your folders…' : 'No videos found yet'),
-      h('p', {}, lib.scanning ? 'This only takes a moment.' : 'None of your folders contain video files Marquee recognises, or a drive is unplugged.'),
-      h('a', { class: 'btn btn-ghost', href: '#/settings' }, 'Manage folders'))));
-    return;
-  }
-  const cw = continueWatching();
-  const shows = lib.titles.filter((t) => t.kind === 'show');
-  const movies = lib.titles.filter((t) => t.kind === 'movie');
-  const recent = [...lib.titles].sort((a, b) => b.addedAt - a.addedAt).slice(0, 20);
-  const featured = cw[0]?.t || recent[0];
-  view.replaceChildren(
-    hero(featured),
-    h('div', { class: 'rows' },
-      row('Continue Watching', cw.map(({ t, nu }) => titleCard(t, { nu, removable: true }))),
-      lib.titles.length > 6 ? row('Recently Added', recent.map((t) => titleCard(t))) : null,
-      row('TV Shows', shows.map((t) => titleCard(t))),
-      row('Movies', movies.map((t) => titleCard(t)))));
-}
-
-function renderGrid(kind) {
-  const list = state.lib.titles.filter((t) => t.kind === kind);
-  view.replaceChildren(h('div', { class: 'page' },
-    h('h1', { class: 'page-title' }, kind === 'show' ? 'TV Shows' : 'Movies'),
-    list.length ? h('div', { class: 'grid' }, list.map((t) => titleCard(t))) : h('p', { class: 'empty' }, `No ${kind === 'show' ? 'shows' : 'movies'} yet.`)));
-}
-
-const norm = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-
-function renderSearch(q) {
-  const n = norm(q.trim());
-  const titles = state.lib.titles.filter((t) => norm(t.name).includes(n));
-  const eps = [];
-  for (const f of Object.values(state.lib.files)) {
-    if (eps.length >= 60) break;
-    const w = loc(f.id);
-    if (w?.title.kind === 'show' && !w.season.extras && norm(f.name).includes(n)) eps.push(f);
-  }
-  view.replaceChildren(h('div', { class: 'page' },
-    h('h1', { class: 'page-title' }, `Results for “${q.trim()}”`),
-    titles.length ? h('div', { class: 'grid' }, titles.map((t) => titleCard(t))) : null,
-    eps.length ? h('h2', { class: 'page-title', style: { 'font-size': '20px', 'margin-top': '40px' } }, 'Episodes') : null,
-    eps.length ? h('div', { class: 'grid' }, eps.map((f) => {
-      const w = loc(f.id);
-      return h('a', { class: 'card', href: watchUrl(f.id) },
-        artBox(`/api/art/file/${f.id}?w=480`, f.name),
-        h('div', { class: 'label' }, f.name, h('small', {}, `${w.title.name} · ${epCode(f.id)}`)));
-    })) : null,
-    !titles.length && !eps.length ? h('p', { class: 'empty' }, 'Nothing matches.') : null));
-}
-
-// ---- Title details (modal) -------------------------------------------------------
-
-function closeModal() {
-  modalRoot.replaceChildren();
-  if (!player.isOpen) document.body.classList.remove('no-scroll');
-}
-
-function markerTags(fid) {
-  const m = markersOf(fid);
-  if (!m) return null;
-  return h('div', { class: 'tags' },
-    m.intro ? h('span', { class: 'tag', title: 'Skip Intro will appear here' }, `Intro ${fmtTime(m.intro.start)}–${fmtTime(m.intro.end)}`) : null,
-    m.credits ? h('span', { class: 'tag', title: 'Next Episode appears when the credits start' }, `Credits ${fmtTime(m.credits.start)}`) : null);
-}
+const block = (title, body, extra = null) => h('section', { class: 'block' }, h('header', {}, h('h2', {}, title), extra), body);
 
 async function setWatched(fileIds, watched) {
   const r = await api.post('/api/watched', { fileIds, watched });
@@ -168,108 +72,201 @@ async function setWatched(fileIds, watched) {
   state.dirty = true;
 }
 
-function openTitle(id, { season: seasonParam } = {}) {
+// One episode (or part, or extra) in a list. `show` adds the show's name (search results).
+function episodeRow(fid, { current = false, show = null, onChange = null } = {}) {
+  const f = fileOf(fid);
+  const p = progressOf(fid);
+  const art = artBox(`/api/art/file/${fid}?w=320`, f.name);
+  art.append(h('div', { class: 'play-hint' }, ic('play')));
+  if (p?.duration && (p.watched || p.position > 5)) art.append(progressBar(p));
+  const m = markersOf(fid);
+  const marks = [m?.intro && `Intro ${fmtTime(m.intro.start)}–${fmtTime(m.intro.end)}`, m?.credits && `Credits ${fmtTime(m.credits.start)}`].filter(Boolean).join(' · ');
+  const toggle = onChange && h('button', { class: `watch-toggle${p?.watched ? ' on' : ''}`, title: p?.watched ? 'Mark unwatched' : 'Mark watched', onclick: async (e) => {
+    e.stopPropagation();
+    await setWatched([fid], !p?.watched);
+    onChange();
+  } }, ic('check'));
+  const row = h('div', { class: `ep${current ? ' current' : ''}${show ? ' no-num' : ''}`, onclick: () => (location.hash = watchUrl(fid)) },
+    show ? null : h('div', { class: 'num' }, f.number ?? ''),
+    art,
+    h('div', { class: 'ep-text' },
+      h('div', { class: 'ep-name' }, h('b', {}, f.name), h('span', { class: 'dur' }, fmtDur(f.duration))),
+      show ? h('div', { class: 'ep-sub' }, `${show.name} · ${epCode(fid)}`) : null,
+      marks ? h('div', { class: 'ep-sub' }, marks) : null),
+    toggle);
+  previewOnHover(art, fid, row);
+  return row;
+}
+
+// ---- Sidebar --------------------------------------------------------------------------
+
+function sideItem(href, label, { key, icon = null, thumb = null, note = null } = {}) {
+  return h('a', { class: 'side-item', href, 'data-key': key },
+    icon ? ic(icon) : thumb ? h('img', { class: 'side-thumb', src: thumb, alt: '', loading: 'lazy' }) : null,
+    h('span', { class: 'side-label' }, label),
+    note ? h('span', { class: 'side-note' }, note) : null);
+}
+
+function renderSidebar() {
+  const titles = state.lib?.titles || [];
+  const keepScroll = sideNav.scrollTop;
+  const titleItem = (t, note) => sideItem(`#/title/${t.id}`, t.name, { key: `title:${t.id}`, thumb: `/api/art/title/${t.id}?type=card&w=120`, note });
+  const group = (label, key, items) => (items.length
+    ? h('div', { class: 'side-group' }, key ? h('a', { class: 'side-head', href: `#/${key}`, 'data-key': key }, label) : h('div', { class: 'side-head' }, label), items)
+    : null);
+  const watching = state.lib?.folders.length ? continueWatching() : [];
+  sideNav.replaceChildren(
+    sideItem('#/', 'Home', { key: 'home', icon: 'home' }),
+    group('Watching', null, watching.map(({ t, nu }) => titleItem(t, t.kind === 'show' ? epCode(nu.fileId) : null))),
+    group('Shows', 'shows', titles.filter((t) => t.kind === 'show').sort(byName).map((t) => titleItem(t))),
+    group('Movies', 'movies', titles.filter((t) => t.kind === 'movie').sort(byName).map((t) => titleItem(t))));
+  sideNav.scrollTop = keepScroll;
+  markActive();
+}
+
+function markActive() {
+  for (const a of document.querySelectorAll('[data-key]')) a.classList.toggle('active', a.dataset.key === page.key);
+}
+
+// ---- Pages ----------------------------------------------------------------------------
+
+function renderWelcome() {
+  view.replaceChildren(h('div', { class: 'welcome' }, h('div', {},
+    h('h1', {}, 'Your films and shows, on your Mac'),
+    h('p', {}, 'Add the folders where your films and series live. Season folders become seasons, playback picks up where you stopped, and intros and end credits are found on this Mac so you can skip them.'),
+    h('button', { class: 'btn btn-play', onclick: () => openPicker() }, ic('plus'), 'Add a folder'))));
+}
+
+function renderHome() {
+  const lib = state.lib;
+  if (!lib.folders.length) return renderWelcome();
+  if (!lib.titles.length) {
+    view.replaceChildren(h('div', { class: 'welcome' }, h('div', {},
+      h('h1', {}, lib.scanning ? 'Looking through your folders…' : 'No videos found yet'),
+      h('p', {}, lib.scanning ? 'This only takes a moment.' : 'None of your folders contain videos Marquee recognises, or a drive is unplugged.'),
+      h('a', { class: 'btn btn-ghost', href: '#/settings' }, 'Manage folders'))));
+    return;
+  }
+  const watching = continueWatching();
+  const recent = [...lib.titles].sort((a, b) => b.addedAt - a.addedAt).slice(0, 12);
+  view.replaceChildren(h('div', { class: 'page' },
+    watching.length ? block('Watching', h('div', { class: 'grid wide' }, watching.map(watchingTile))) : null,
+    block(watching.length ? 'Recently added' : 'Your library', h('div', { class: 'grid' }, recent.map(titleTile)))));
+}
+
+function renderGrid(kind) {
+  const list = state.lib.titles.filter((t) => t.kind === kind).sort(byName);
+  view.replaceChildren(h('div', { class: 'page' },
+    h('h1', { class: 'page-title' }, kind === 'show' ? 'Shows' : 'Movies'),
+    list.length ? h('div', { class: 'grid' }, list.map(titleTile)) : h('p', { class: 'empty' }, `No ${kind === 'show' ? 'shows' : 'movies'} yet.`)));
+}
+
+const norm = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+function renderSearch(q) {
+  const n = norm(q.trim());
+  const titles = state.lib.titles.filter((t) => norm(t.name).includes(n)).sort(byName);
+  const eps = [];
+  for (const f of Object.values(state.lib.files)) {
+    if (eps.length >= 60) break;
+    const w = loc(f.id);
+    if (w?.title.kind === 'show' && !w.season.extras && norm(f.name).includes(n)) eps.push(f);
+  }
+  view.replaceChildren(h('div', { class: 'page' },
+    h('h1', { class: 'page-title' }, `“${q.trim()}”`),
+    titles.length ? block('Titles', h('div', { class: 'grid' }, titles.map(titleTile))) : null,
+    eps.length ? block('Episodes', h('div', { class: 'episodes' }, eps.map((f) => episodeRow(f.id, { show: loc(f.id).title })))) : null,
+    !titles.length && !eps.length ? h('p', { class: 'empty' }, 'Nothing matches.') : null));
+}
+
+// A show or film: what to play next, then its seasons and episodes.
+function renderTitle(id, seasonParam) {
   const t = state.titles.get(id);
-  if (!t) return closeModal();
+  if (!t) {
+    view.replaceChildren(h('div', { class: 'page' }, h('p', { class: 'empty' }, 'This title is no longer in your library.')));
+    return;
+  }
   api.post('/api/analysis/prioritize', { titleId: id }).catch(() => {});
-  document.body.classList.add('no-scroll');
-  const nu = nextUp(t);
   const isShow = t.kind === 'show';
-  let seasonIdx = seasonParam != null ? Number(seasonParam) : Math.max(0, loc(nu.fileId)?.seasonIndex ?? 0);
   const all = t.seasons.flatMap((s) => s.episodes);
   const main = playOrder(t);
+  const nu = nextUp(t);
+  let seasonIdx = seasonParam != null && t.seasons[Number(seasonParam)] ? Number(seasonParam) : Math.max(0, loc(nu.fileId)?.seasonIndex ?? 0);
+  const headEl = h('header', { class: 'title-head' });
+  const listEl = h('div', { class: 'title-list' });
 
-  const heroEl = h('div', { class: 'modal-hero' });
-  const img = new Image();
-  img.onload = () => (heroEl.style.backgroundImage = `url("${img.src}")`);
-  img.src = `/api/art/title/${t.id}?type=backdrop&w=1280`;
+  function drawHead() {
+    const art = artBox(`/api/art/file/${nu.fileId}?w=640`, t.name);
+    const p = progressOf(nu.fileId);
+    if (nu.resume && p?.duration) art.append(progressBar(p));
+    previewOnHover(art, nu.fileId);
+    const watchedCount = main.filter((fid) => progressOf(fid)?.watched).length;
+    const allWatched = watchedCount === main.length;
+    const detected = all.filter((fid) => markersOf(fid)?.intro).length;
+    const credits = all.filter((fid) => markersOf(fid)?.credits).length;
+    const analysable = t.seasons.filter((s) => !s.extras).flatMap((s) => s.episodes).length;
+    const working = state.status?.analysis?.current?.label?.startsWith(t.name) || false;
+    const facts = [titleMeta(t), isShow && t.seasons.filter((s) => !s.extras).length > 1 ? `${main.length} episodes` : null,
+      watchedCount ? (isShow ? `${watchedCount} watched` : 'Watched') : null].filter(Boolean).join(' · ');
+    const next = isShow && !nu.fresh ? h('div', { class: 'next-line' }, h('span', {}, nu.resume ? 'Watching' : 'Up next'), `${epCode(nu.fileId)} · ${fileOf(nu.fileId).name}`) : null;
+    headEl.replaceChildren(
+      h('a', { class: 'title-art', href: watchUrl(nu.fileId, nu.start), title: nextUpLabel(t, nu) }, art),
+      h('div', { class: 'title-info' },
+        h('h1', {}, t.name),
+        h('div', { class: 'facts' }, facts),
+        next,
+        h('div', { class: 'btns' },
+          h('a', { class: 'btn btn-play', href: watchUrl(nu.fileId, nu.start) }, ic('play'), nextUpLabel(t, nu)),
+          nu.resume ? h('a', { class: 'btn btn-ghost', href: watchUrl(nu.fileId, 0), title: 'Start this one from the beginning' }, 'Start over') : null,
+          h('button', { class: 'btn btn-ghost', title: allWatched ? 'Mark everything unwatched' : 'Mark everything watched', onclick: async () => {
+            await setWatched(main, !allWatched);
+            draw();
+          } }, ic('check'), `Mark ${isShow ? 'all ' : ''}${allWatched ? 'unwatched' : 'watched'}`),
+          h('button', { class: 'btn btn-ghost btn-icon', title: 'Detect intros and credits again', onclick: async () => {
+            await api.post(`/api/analyze/${t.id}`);
+            toast('Detecting intros and credits again for this title');
+          } }, ic('refresh'))),
+        h('p', { class: 'detect-note' }, ic('checkCircle'),
+          isShow
+            ? `Skip Intro ready for ${detected} of ${analysable} episodes · Next Episode at the credits for ${credits}${working ? ' · detecting now…' : ''}`
+            : credits ? 'End credits found: it counts as watched once they start' : working ? 'Looking for the end credits…' : 'No end credits found yet')));
+  }
 
-  const listEl = h('div');
-  const watchedAll = () => main.every((fid) => progressOf(fid)?.watched);
-  const watchedBtn = h('button', { class: `round-btn${watchedAll() ? ' on' : ''}`, title: 'Mark everything watched / unwatched', onclick: async () => {
-    await setWatched(main, !watchedAll());
-    draw();
-  } }, ic('check'));
-
-  const playLabel = nextUpLabel(t, nu);
-  heroEl.append(h('div', { class: 'hero-inner' },
-    h('h1', {}, t.name),
-    h('div', { class: 'btns' },
-      h('a', { class: 'btn btn-play', href: watchUrl(nu.fileId, nu.start) }, ic('play'), playLabel),
-      nu.resume ? h('a', { class: 'btn btn-ghost', href: watchUrl(nu.fileId, 0), title: 'Start this one from the beginning' }, ic('replay10'), 'Start over') : null,
-      watchedBtn,
-      h('button', { class: 'round-btn', title: 'Detect intros & credits again', onclick: async () => {
-        await api.post(`/api/analyze/${t.id}`);
-        toast('Re-detecting intros and credits for this title');
-      } }, ic('refresh')))));
-
-  const detected = all.filter((fid) => markersOf(fid)?.intro).length;
-  const credits = all.filter((fid) => markersOf(fid)?.credits).length;
-  const analysable = t.seasons.filter((s) => !s.extras).flatMap((s) => s.episodes).length;
-  const watchedCount = main.filter((fid) => progressOf(fid)?.watched).length;
-
-  const facts = h('div', { class: 'facts' },
-    t.year ? h('span', {}, t.year) : null,
-    h('span', {}, titleMeta(t)),
-    watchedCount ? h('span', { class: 'hl' }, isShow ? `${watchedCount} of ${main.length} watched` : 'Watched') : null);
-  const status = state.status?.analysis;
-  const working = status?.current?.label?.startsWith(t.name) || false;
-  const note = h('p', { class: 'detect-note' }, ic('checkCircle'),
-    isShow
-      ? `Skip Intro ready for ${detected} of ${analysable} episodes · Next Episode at the credits for ${credits}${working ? ' · detecting now…' : ''}`
-      : credits ? 'End credits detected: the movie counts as watched once they start' : working ? 'Detecting end credits…' : 'No end credits detected yet');
-
-  function draw() {
-    watchedBtn.classList.toggle('on', watchedAll());
-    if (!isShow && t.seasons[0].episodes.length === 1) {
-      listEl.replaceChildren();
-      return;
-    }
+  function drawList() {
     const season = t.seasons[seasonIdx] || t.seasons[0];
-    const sel = isShow && t.seasons.length > 1
-      ? h('div', { class: 'select' }, h('select', { onchange: (e) => { seasonIdx = Number(e.target.value); draw(); } },
-          t.seasons.map((s, i) => h('option', { value: i, selected: i === seasonIdx }, `${s.name} (${s.episodes.length})`))))
-      : null;
+    if (!isShow && season.episodes.length === 1 && t.seasons.length === 1) return listEl.replaceChildren();
+    const tabs = t.seasons.length > 1
+      ? h('div', { class: 'tabs', role: 'tablist' }, t.seasons.map((s, i) => h('button', {
+          class: `tab${i === seasonIdx ? ' on' : ''}`, role: 'tab', 'aria-selected': String(i === seasonIdx),
+          onclick: () => {
+            seasonIdx = i;
+            history.replaceState(null, '', `#/title/${t.id}?season=${i}`);
+            drawList();
+          },
+        }, s.name)))
+      : h('h2', {}, isShow ? 'Episodes' : 'Parts');
     const seasonWatched = season.episodes.every((fid) => progressOf(fid)?.watched);
     api.post('/api/previews/prioritize', { fileIds: season.episodes }).catch(() => {});
     listEl.replaceChildren(
-      h('div', { class: 'ep-head' }, h('h2', {}, isShow ? 'Episodes' : 'Parts'), h('div', { class: 'btns' },
-        h('button', { class: 'link-btn', onclick: async () => { await setWatched(season.episodes, !seasonWatched); draw(); } }, seasonWatched ? 'Mark season unwatched' : 'Mark season watched'),
-        sel)),
-      h('div', { class: 'episodes' }, season.episodes.map((fid) => {
-        const f = fileOf(fid);
-        const p = progressOf(fid);
-        const art = artBox(`/api/art/file/${fid}?w=320`, f.name);
-        art.append(h('div', { class: 'play-hint' }, ic('play')));
-        if (p?.duration && (p.watched || p.position > 5)) art.append(h('div', { class: 'bar' }, h('i', { style: { width: `${p.watched ? 100 : (p.position / p.duration) * 100}%` } })));
-        const toggle = h('button', { class: `watch-toggle${p?.watched ? ' on' : ''}`, title: p?.watched ? 'Mark unwatched' : 'Mark watched', onclick: async (e) => {
-          e.stopPropagation();
-          await setWatched([fid], !p?.watched);
-          draw();
-        } }, ic('check'));
-        const row = h('div', { class: `ep${fid === nu.fileId ? ' current' : ''}`, onclick: () => (location.hash = watchUrl(fid)) },
-          h('div', { class: 'num' }, f.number ?? ''),
-          art,
-          h('div', {}, h('h3', {}, h('span', {}, f.name), h('span', { class: 'dur' }, fmtDur(f.duration))), markerTags(fid)),
-          toggle);
-        previewOnHover(art, fid, row);
-        return row;
-      })));
+      h('div', { class: 'list-head' }, tabs,
+        h('button', { class: 'link-btn', onclick: async () => { await setWatched(season.episodes, !seasonWatched); draw(); } },
+          seasonWatched ? `Mark ${season.extras ? 'all' : 'season'} unwatched` : `Mark ${season.extras ? 'all' : 'season'} watched`)),
+      h('div', { class: 'episodes' }, season.episodes.map((fid) => episodeRow(fid, { current: fid === nu.fileId, onChange: draw }))));
+    listEl.querySelector('.tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  function draw() {
+    drawHead();
+    drawList();
   }
   draw();
-
-  const overlay = h('div', { class: 'overlay', onclick: (e) => e.target === overlay && (location.hash = baseHash()) },
-    h('div', { class: 'modal', role: 'dialog', 'aria-label': t.name },
-      h('button', { class: 'modal-close', 'aria-label': 'Close', onclick: () => (location.hash = baseHash()) }, ic('close')),
-      heroEl,
-      h('div', { class: 'modal-body' }, facts, note, listEl)));
-  modalRoot.replaceChildren(overlay);
-  // Bring the current episode into view only when it is further down the list.
-  const cur = overlay.querySelector('.ep.current');
+  view.replaceChildren(h('div', { class: 'page title-page' }, headEl, listEl));
+  // Bring the episode up next into view when it is further down the list.
+  const cur = listEl.querySelector('.ep.current');
   if (cur && seasonParam == null) {
     setTimeout(() => {
       if (cur.getBoundingClientRect().bottom > window.innerHeight - 40) cur.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }, 250);
+    }, 200);
   }
 }
 
@@ -515,7 +512,6 @@ function openPicker() {
 
 // ---- Router --------------------------------------------------------------------------------
 
-const baseHash = () => (page.base === 'home' ? '#/' : page.base === 'search' ? `#/search?q=${encodeURIComponent(page.query)}` : `#/${page.base}`);
 let prevHash = '';
 
 async function route(forceDraw = false) {
@@ -526,23 +522,24 @@ async function route(forceDraw = false) {
   try {
     await loadLibrary();
   } catch (e) {
-    view.replaceChildren(h('div', { class: 'welcome' }, h('div', {}, h('h1', {}, 'Marquee is not running'), h('p', {}, 'Start it again and reload this window.'))));
-    return;
+    return; // the engine is gone: the "stopped" notice covers the window
   }
 
   if (parts[0] === 'watch') {
-    modalRoot.replaceChildren();
     player.open(parts[1], { start: params.has('t') ? Number(params.get('t')) : null, returnTo: prevHash || null });
     return;
   }
   if (player.isOpen) player.hide();
 
-  let base = parts[0] === 'title' ? page.base || 'home' : ['shows', 'movies', 'settings', 'search'].includes(parts[0]) ? parts[0] : 'home';
+  let base = ['title', 'shows', 'movies', 'settings', 'search'].includes(parts[0]) ? parts[0] : 'home';
   const query = base === 'search' ? params.get('q') || '' : '';
   if (base === 'search' && !query.trim()) base = 'home';
-  if (forceDraw || state.dirty || base !== page.base || query !== page.query) {
-    const sameBase = base === page.base;
+  if (base === 'title' && !parts[1]) base = 'home';
+  const key = base === 'title' ? `title:${parts[1]}` : base;
+  if (forceDraw || state.dirty || key !== page.key || query !== page.query) {
+    const same = key === page.key && query === page.query;
     const y = window.scrollY;
+    page.key = key;
     page.base = base;
     page.query = query;
     page.drawStatus = null;
@@ -551,25 +548,22 @@ async function route(forceDraw = false) {
     else if (base === 'movies') renderGrid('movie');
     else if (base === 'settings') renderSettings();
     else if (base === 'search') renderSearch(query);
+    else if (base === 'title') renderTitle(parts[1], params.get('season'));
+    renderSidebar();
     state.dirty = false;
-    window.scrollTo(0, sameBase ? y : 0);
+    window.scrollTo(0, same ? y : 0);
   }
-  for (const a of document.querySelectorAll('[data-nav]')) a.classList.toggle('active', a.dataset.nav === base);
+  markActive();
   if (base !== 'search' && document.activeElement !== searchInput) {
     searchInput.value = '';
     searchInput.parentElement.classList.remove('filled');
   }
-
-  if (parts[0] === 'title') openTitle(parts[1], { season: params.get('season') });
-  else closeModal();
 }
 
 window.addEventListener('hashchange', (e) => {
   prevHash = new URL(e.oldURL).hash || '#/';
   route();
 });
-
-window.addEventListener('scroll', () => nav.classList.toggle('solid', window.scrollY > 10), { passive: true });
 
 searchInput.addEventListener('input', () => {
   const q = searchInput.value;
@@ -581,10 +575,13 @@ searchInput.addEventListener('input', () => {
 
 document.addEventListener('keydown', (e) => {
   if (player.isOpen) return;
-  if (e.key === 'Escape' && modalRoot.firstChild) location.hash = baseHash();
-  else if (e.key === '/' && document.activeElement !== searchInput && !e.target.matches('input, select, textarea')) {
+  if (e.key === '/' && document.activeElement !== searchInput && !e.target.matches('input, select, textarea')) {
     e.preventDefault();
     searchInput.focus();
+  } else if (e.key === 'Escape' && document.activeElement === searchInput) {
+    searchInput.value = '';
+    searchInput.blur();
+    location.hash = '#/';
   }
 });
 
@@ -605,9 +602,10 @@ async function pollStatus() {
     } else activity.hidden = true;
     page.drawStatus?.();
     // Pick up new markers/library changes when the user is not mid-interaction.
-    if (!player.isOpen && Date.now() - state.loadedAt > 20000 && !modalRoot.firstChild) {
+    if (!player.isOpen && Date.now() - state.loadedAt > 20000) {
       await loadLibrary(true);
       if (page.base === 'home' || page.base === 'shows' || page.base === 'movies') route();
+      else if (state.dirty) renderSidebar();
     }
   } catch {}
   setTimeout(pollStatus, page.base === 'settings' ? 2000 : 6000);

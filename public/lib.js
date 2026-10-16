@@ -79,6 +79,9 @@ export function h(tag, attrs, ...children) {
 }
 
 const ICONS = {
+  home: '<path d="M12 3 2.5 11.2l1.3 1.5L5 11.7V20h5.5v-5.5h3V20H19v-8.3l1.2 1 1.3-1.5L12 3Z"/>',
+  gear: '<path d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.5 7.5 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.5 7.5 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.5 7.5 0 0 0 1.7 1l.4 2.6h4l.4-2.6a7.5 7.5 0 0 0 1.7-1l2.5 1 2-3.5L19.4 13ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" transform="translate(-1 0)"/>',
+  search: '<path d="M10.5 3a7.5 7.5 0 0 1 5.96 12.05l4.25 4.24-1.42 1.42-4.24-4.25A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"/>',
   play: '<path d="M8 5.14v13.72L19 12 8 5.14Z"/>',
   pause: '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>',
   info: '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 15h-2v-6h2v6Zm0-8h-2V7h2v2Z"/>',
@@ -192,7 +195,7 @@ export function nextAfter(fid) {
   return i >= 0 ? order[i + 1] || null : null;
 }
 
-// Netflix-style: resume the last thing touched, or the episode after it.
+// What to play for a title: resume the last thing touched, or the episode after it.
 export function nextUp(title) {
   const order = playOrder(title);
   let latest = null;

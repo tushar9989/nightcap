@@ -1,7 +1,7 @@
 {
   "name": "Marquee",
   "short_name": "Marquee",
-  "description": "Your movies and TV shows, Netflix-style, with on-device intro and credits detection.",
+  "description": "A player for the films and shows on your own Mac, with skip intro, next episode, previews and subtitles.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#141414",
