@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -216,4 +217,51 @@ test('requests are spaced to respect the rate limit', async () => {
   const t0 = Date.now();
   await Promise.all([1, 2, 3].map(() => os1.request('GET', '/infos/formats')));
   assert.ok(Date.now() - t0 >= 450, `took ${Date.now() - t0} ms`);
+});
+
+// Stands in for a network that resets the first `resets` connections to the
+// API right after the client's first bytes (as some internet providers do).
+async function flakyProxy(resets) {
+  const target = new URL(base);
+  const sockets = new Set();
+  let connections = 0;
+  const proxy = net.createServer((socket) => {
+    connections++;
+    sockets.add(socket);
+    if (resets-- > 0) return socket.once('data', () => socket.resetAndDestroy());
+    const up = net.connect(Number(target.port), target.hostname);
+    sockets.add(up);
+    socket.pipe(up).pipe(socket);
+    up.on('error', () => socket.destroy());
+    socket.on('error', () => up.destroy());
+  });
+  await new Promise((r) => proxy.listen(0, '127.0.0.1', r));
+  return {
+    base: `http://127.0.0.1:${proxy.address().port}/api/v1`,
+    connections: () => connections,
+    close: () => {
+      for (const s of sockets) s.destroy();
+      proxy.close();
+    },
+  };
+}
+
+test('connections the network resets are tried again', async () => {
+  const flaky = await flakyProxy(3);
+  try {
+    const os1 = new OpenSubtitles(new JsonStore(path.join(tmp, 'os-flaky.json'), {}, { mode: 0o600 }), { base: flaky.base, envKey: '' });
+    await os1.setKey(KEY);
+    assert.equal(os1.configured, true);
+    assert.equal(flaky.connections(), 4);
+  } finally {
+    flaky.close();
+  }
+  const blocked = await flakyProxy(Infinity);
+  try {
+    const os2 = new OpenSubtitles(new JsonStore(path.join(tmp, 'os-blocked.json'), {}, { mode: 0o600 }), { base: blocked.base, envKey: KEY });
+    await assert.rejects(os2.request('GET', '/infos/formats'), /keeps cutting the connection/);
+    assert.equal(blocked.connections(), 10);
+  } finally {
+    blocked.close();
+  }
 });

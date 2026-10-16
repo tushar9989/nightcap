@@ -19,6 +19,29 @@ const SPACING_MS = 250; // the API allows 5 requests per second per IP
 const SHOW_CACHE_MS = 30 * 86400e3;
 const MAX_SUBTITLE_BYTES = 8 << 20;
 
+// Some networks cut connections to OpenSubtitles at random: one internet
+// provider was seen resetting about half of the TLS handshakes for
+// *.opensubtitles.com, a few ms after the hello (the name is readable there).
+// A connection reset before the reply never reached the API, so try again.
+const RESET_CODES = new Set(['ECONNRESET', 'EPIPE', 'ECONNABORTED', 'UND_ERR_SOCKET']);
+const ATTEMPTS = 10;
+const BLOCKED = 'Your network keeps cutting the connection to OpenSubtitles (your internet provider may be blocking it). Try again in a moment.';
+
+async function fetchRetrying(url, options, timeout) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fetch(url, { ...options, signal: AbortSignal.timeout(timeout) });
+    } catch (e) {
+      const reset = RESET_CODES.has(e.cause?.code);
+      if (!reset || attempt >= ATTEMPTS) {
+        console.warn(`[opensubtitles] ${new URL(url).host}: ${e.cause?.code || e.name} (try ${attempt})`);
+        throw new OpenSubtitlesError(reset ? BLOCKED : 'Could not reach OpenSubtitles (offline?)', 0);
+      }
+      await new Promise((r) => setTimeout(r, 100 + 50 * attempt));
+    }
+  }
+}
+
 // OpenSubtitles "moviehash": file size plus the 64-bit little-endian words of
 // the first and last 64 KiB. Identifies the exact release, so subtitles made
 // for this very file come first and are in sync.
@@ -132,12 +155,7 @@ export class OpenSubtitles {
     const headers = { 'Api-Key': key, 'User-Agent': USER_AGENT, Accept: 'application/json' };
     if (body) headers['Content-Type'] = 'application/json';
     if (auth && this.signedIn) headers.Authorization = `Bearer ${this.store.data.token}`;
-    let r;
-    try {
-      r = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000) });
-    } catch {
-      throw new OpenSubtitlesError('Could not reach OpenSubtitles (offline?)', 0);
-    }
+    const r = await fetchRetrying(url, { method, headers, body: body ? JSON.stringify(body) : undefined }, 20000);
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
       const msg = data.message || (Array.isArray(data.errors) ? data.errors.join(', ') : '') || `OpenSubtitles answered ${r.status}`;
@@ -256,14 +274,11 @@ export class OpenSubtitles {
     this.store.data.quota = { remaining: Number.isFinite(info.remaining) ? info.remaining : null, resetAt: info.reset_time_utc || null };
     this.store.save();
     if (!info.link) throw new OpenSubtitlesError(info.message || 'OpenSubtitles did not return a download link', 502);
-    let r;
-    try {
-      r = await fetch(info.link, { headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(30000) });
-    } catch {
-      throw new OpenSubtitlesError('The subtitle download failed (offline?)', 0);
-    }
+    const r = await fetchRetrying(info.link, { headers: { 'User-Agent': USER_AGENT } }, 30000);
     if (!r.ok) throw new OpenSubtitlesError(`The subtitle download failed (${r.status})`, 502);
-    const buf = Buffer.from(await r.arrayBuffer());
+    const buf = Buffer.from(await r.arrayBuffer().catch(() => {
+      throw new OpenSubtitlesError('The subtitle download was cut off. Try again.', 0);
+    }));
     if (buf.length > MAX_SUBTITLE_BYTES) throw new OpenSubtitlesError('That subtitle file is too large', 502);
     return { text: decodeText(buf), fileName: info.file_name || '', remaining: info.remaining ?? null, resetAt: info.reset_time_utc || null };
   }
