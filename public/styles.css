@@ -155,9 +155,10 @@ svg { fill: currentColor; }
 .card .card-x svg { width: 14px; height: 14px; }
 .card:hover .card-x { opacity: 1; }
 .card .card-x:hover { background: #000; border-color: #fff; }
-.bar { position: absolute; left: 10px; right: 10px; bottom: 6px; height: 3px; background: rgba(255,255,255,.3); border-radius: 2px; overflow: hidden; }
+/* Progress along the bottom edge, drawn above the card's title gradient. */
+.bar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; height: 4px; background: rgba(255,255,255,.35); overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--accent); }
-.card .bar ~ .label { padding-bottom: 14px; }
+.card:has(.bar) .label { padding-bottom: 13px; }
 .badge-new { position: absolute; top: 8px; left: 8px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 3px; letter-spacing: .05em; }
 
 /* ---- Welcome ---- */
