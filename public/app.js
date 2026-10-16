@@ -1,6 +1,6 @@
 import {
   state, api, h, ic, artBox, fmtDur, fmtTime, toast, loadLibrary, setLibrary, loc, fileOf, progressOf, markersOf,
-  epCode, playOrder, nextUp, nextUpLabel, continueWatching, watchUrl,
+  epCode, playOrder, nextUp, nextUpLabel, continueWatching, watchUrl, subLanguages,
 } from './lib.js';
 import { Player } from './player.js';
 
@@ -281,6 +281,88 @@ function toggle(label, desc, key) {
   return h('div', { class: 'setting' }, h('div', {}, h('div', {}, label), h('div', { class: 'desc' }, desc)), h('label', { class: 'switch' }, input, h('span')));
 }
 
+// Two clicks to confirm in place: the first arms the button, the second acts.
+function armed(btn, label) {
+  if (btn.dataset.armed) return true;
+  const text = btn.textContent;
+  btn.dataset.armed = '1';
+  btn.textContent = label;
+  setTimeout(() => {
+    delete btn.dataset.armed;
+    btn.textContent = text;
+  }, 4000);
+  return false;
+}
+
+const OS_LINK = (text, href) => h('a', { href, target: '_blank', rel: 'noopener' }, text);
+
+// Subtitle language, automatic downloads and the OpenSubtitles.com connection.
+function subtitlesSection() {
+  const lib = state.lib;
+  const box = h('div', { class: 'os-box' });
+  const lang = h('select', { onchange: async (e) => {
+    state.lib.settings = await api.post('/api/settings', { subtitleLanguage: e.target.value });
+  } }, subLanguages(lib.settings.subtitleLanguage).map((l) => h('option', { value: l.code, selected: l.code === lib.settings.subtitleLanguage }, l.name)));
+
+  const draw = (st, msg = '') => {
+    const note = h('div', { class: `muted os-msg${msg ? ' err' : ''}` }, msg);
+    const busy = async (btn, fn) => {
+      btn.disabled = true;
+      note.classList.remove('err');
+      note.textContent = 'Checking with OpenSubtitles…';
+      try {
+        draw(await fn());
+      } catch (e) {
+        draw(st, e.message);
+      }
+    };
+    const head = h('div', { class: 'os-head' }, h('b', {}, 'OpenSubtitles.com'),
+      h('span', { class: `pill${st.configured ? ' on' : ''}` }, st.configured ? (st.signedIn ? `Signed in as ${st.username}` : 'Connected') : 'Not set up'));
+    if (!st.configured) {
+      const key = h('input', { type: 'password', placeholder: 'API key', autocomplete: 'off', spellcheck: false, 'aria-label': 'OpenSubtitles API key' });
+      const save = h('button', { class: 'btn btn-accent btn-small', onclick: () => busy(save, () => api.post('/api/opensubtitles/key', { apiKey: key.value })) }, 'Save key');
+      key.addEventListener('keydown', (e) => e.key === 'Enter' && save.click());
+      box.replaceChildren(head,
+        h('p', {}, 'To search online, Marquee needs your own API key. It is free:'),
+        h('ol', {},
+          h('li', {}, 'Create an account on ', OS_LINK('opensubtitles.com', 'https://www.opensubtitles.com/en/users/sign_up'), '.'),
+          h('li', {}, 'Open ', OS_LINK('API consumers', 'https://www.opensubtitles.com/en/consumers'), ', add a new consumer (call it Marquee) and copy its API key.'),
+          h('li', {}, 'Paste the key here. It stays on this Mac, in Marquee’s data folder.')),
+        h('div', { class: 'os-row-form' }, key, save), note);
+      return;
+    }
+    const left = st.remaining != null ? ` · ${st.remaining} left today` : '';
+    const keyLine = h('div', { class: 'setting' },
+      h('div', {}, h('div', {}, 'API key'), h('div', { class: 'desc' }, st.keyFromEnv ? `${st.keyHint} (from OPENSUBTITLES_API_KEY)` : st.keyHint)),
+      st.keyFromEnv ? null : h('button', { class: 'link-btn', onclick: (e) => armed(e.currentTarget, 'Click again to remove') && busy(e.currentTarget, () => api.post('/api/opensubtitles/key', { apiKey: '' })) }, 'Remove key'));
+    let account;
+    if (st.signedIn) {
+      account = h('div', { class: 'setting' },
+        h('div', {}, h('div', {}, `Signed in as ${st.username}`), h('div', { class: 'desc' }, `${[st.level, st.allowedDownloads != null ? `${st.allowedDownloads} downloads a day` : ''].filter(Boolean).join(' · ')}${left}`)),
+        h('button', { class: 'link-btn', onclick: (e) => busy(e.currentTarget, () => api.post('/api/opensubtitles/logout')) }, 'Sign out'));
+    } else {
+      const user = h('input', { type: 'text', placeholder: 'Username', autocomplete: 'username', spellcheck: false, 'aria-label': 'OpenSubtitles username', value: st.username || '' });
+      const pass = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password', 'aria-label': 'OpenSubtitles password' });
+      const go = h('button', { class: 'btn btn-ghost btn-small', onclick: () => busy(go, () => api.post('/api/opensubtitles/login', { username: user.value, password: pass.value })) }, 'Sign in');
+      pass.addEventListener('keydown', (e) => e.key === 'Enter' && go.click());
+      account = h('div', { class: 'os-signin' },
+        h('div', {}, st.signInExpired ? 'Your sign-in has expired. ' : '', `Without signing in you can download 5 subtitles a day${left}. Signing in uses your account’s own daily allowance. Your password is only sent to OpenSubtitles, never stored.`),
+        h('div', { class: 'os-row-form' }, user, pass, go));
+    }
+    box.replaceChildren(head, keyLine, account, note,
+      h('div', { class: 'muted os-foot' }, 'Subtitles provided by ', OS_LINK('OpenSubtitles.com', 'https://www.opensubtitles.com'), '. Downloaded subtitles are kept in Marquee’s data folder; your media folders are not touched.'));
+  };
+  box.replaceChildren(h('div', { class: 'muted' }, 'Loading…'));
+  api.get('/api/opensubtitles?refresh=1').then((st) => draw(st), (e) => box.replaceChildren(h('div', { class: 'muted' }, e.message)));
+
+  return h('section', { class: 'section' },
+    h('h2', {}, 'Subtitles'),
+    h('p', {}, 'Subtitle files next to a video and subtitle tracks inside it are found automatically. Marquee can also search OpenSubtitles.com, preferring subtitles timed for your exact file (Subtitles button → Search online…). Adverts that uploaders put into subtitles are hidden.'),
+    h('div', { class: 'setting' }, h('div', {}, h('div', {}, 'Subtitle language'), h('div', { class: 'desc' }, 'Searched first, and used for automatic downloads.')), h('div', { class: 'select' }, lang)),
+    toggle('Download missing subtitles automatically', 'When you watch with subtitles on and an episode has none in your language, fetch the best match from OpenSubtitles (one download from the daily allowance per episode).', 'autoFetchSubtitles'),
+    box);
+}
+
 function renderSettings() {
   const lib = state.lib;
   const folders = lib.folders.map((f) => {
@@ -294,17 +376,7 @@ function renderSettings() {
         renderSettings();
       } }, Object.entries(KINDS).map(([k, v]) => h('option', { value: k, selected: f.kind === k }, v))),
       h('button', { class: 'link-btn', title: 'Remove from library (files are not touched)', onclick: async (e) => {
-        const btn = e.currentTarget;
-        // Two-step confirm in place: first click arms, second click removes.
-        if (!btn.dataset.armed) {
-          btn.dataset.armed = '1';
-          btn.textContent = 'Click again to remove';
-          setTimeout(() => {
-            delete btn.dataset.armed;
-            btn.textContent = 'Remove';
-          }, 4000);
-          return;
-        }
+        if (!armed(e.currentTarget, 'Click again to remove')) return;
         setLibrary(await api.del(`/api/folders/${f.id}`));
         renderSettings();
         toast('Folder removed (files untouched)');
@@ -341,7 +413,8 @@ function renderSettings() {
       toggle('Skip intros automatically', 'Otherwise a Skip Intro button appears during the intro.', 'autoSkipIntro'),
       toggle('Autoplay next episode', 'When the end credits start, count down and play the next episode.', 'autoplayNext'),
       h('div', { class: 'setting' }, h('div', {}, h('div', {}, 'Next episode countdown')), h('div', { class: 'select' }, countdown)),
-      h('div', { class: 'setting' }, h('div', {}, h('div', {}, 'Keyboard'), h('div', { class: 'desc' }, 'Space play/pause · ←/→ 10 s · ↑/↓ volume up to 200% · [ ] speed ({ } fine, = normal) · S skip intro · N next episode · C subtitles · F full screen · M mute')))),
+      h('div', { class: 'setting' }, h('div', {}, h('div', {}, 'Keyboard'), h('div', { class: 'desc' }, 'Space play/pause · ←/→ 10 s · ↑/↓ volume up to 200% · [ ] speed ({ } fine, = normal) · S skip intro · N next episode · C subtitles · G / H subtitles earlier / later · F full screen · M mute')))),
+    subtitlesSection(),
     h('section', { class: 'section' },
       h('h2', {}, 'Engine'),
       h('p', {}, lib.ffmpeg

@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { FFMPEG, FFPROBE, DATA_DIR, JsonStore, Limiter, ensureDir, fileSig, sigHash, run } from './util.js';
+import { decodeText, srtToVtt, sniffFormat } from './subtext.js';
 
 const PROBE_VERSION = 2;
 const probeStore = new JsonStore(path.join(DATA_DIR, 'probe.json'), { files: {} });
@@ -190,19 +191,6 @@ export async function listSubtitles(file) {
   return out;
 }
 
-function decodeText(buf) {
-  if (buf[0] === 0xff && buf[1] === 0xfe) return new TextDecoder('utf-16le').decode(buf);
-  if (buf[0] === 0xfe && buf[1] === 0xff) return new TextDecoder('utf-16be').decode(buf);
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
-  } catch {
-    return new TextDecoder('windows-1252').decode(buf);
-  }
-}
-
-const srtToVtt = (text) =>
-  'WEBVTT\n\n' + text.replace(/^﻿/, '').replace(/\r\n?/g, '\n').replace(/(\d{1,2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
-
 // Returns the subtitle as WebVTT text.
 export async function subtitleVtt(file, subId) {
   const kind = subId[0];
@@ -229,4 +217,20 @@ export async function subtitleVtt(file, subId) {
   const text = r.stdout.toString('utf8');
   await fsp.writeFile(cache, text);
   return text;
+}
+
+// Subtitle text (SRT, WebVTT, ASS/SSA, MicroDVD, SAMI, MPL2) as WebVTT.
+export async function textToVtt(text, ext = '') {
+  const fmt = sniffFormat(text);
+  if (fmt === 'vtt') return text.replace(/^﻿/, '');
+  if (fmt === 'srt' || (!fmt && ext === '.srt')) return srtToVtt(text);
+  if (!fmt || !FFMPEG) return null;
+  const tmp = path.join(SUB_DIR, `convert-${process.pid}-${Date.now()}.txt`);
+  await fsp.writeFile(tmp, text);
+  try {
+    const r = await run(FFMPEG, ['-nostdin', '-loglevel', 'error', '-f', fmt, '-i', tmp, '-f', 'webvtt', 'pipe:1'], { timeout: 60000 });
+    return r.code === 0 ? r.stdout.toString('utf8') : null;
+  } finally {
+    await fsp.rm(tmp, { force: true });
+  }
 }

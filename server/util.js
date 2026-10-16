@@ -76,9 +76,11 @@ export class Limiter {
 }
 
 // A JSON file kept in memory and written back (atomically) shortly after changes.
+// `mode` 0o600 keeps files with secrets readable by this user only.
 export class JsonStore {
-  constructor(file, defaults) {
+  constructor(file, defaults, { mode } = {}) {
     this.file = file;
+    this.mode = mode;
     this.timer = null;
     try {
       this.data = { ...structuredClone(defaults), ...JSON.parse(fs.readFileSync(file, 'utf8')) };
@@ -95,7 +97,8 @@ export class JsonStore {
     this.timer = null;
     ensureDir(path.dirname(this.file));
     const tmp = `${this.file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.data));
+    fs.writeFileSync(tmp, JSON.stringify(this.data), this.mode ? { mode: this.mode } : undefined);
+    if (this.mode) fs.chmodSync(tmp, this.mode);
     fs.renameSync(tmp, this.file);
   }
 }

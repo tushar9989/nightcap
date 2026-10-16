@@ -7,6 +7,10 @@ import { ROOT, DATA_DIR, FFMPEG, FFPROBE, JsonStore, ensureDir, hashId, naturalC
 import { scanLibrary } from './scanner.js';
 import { probe, cachedProbe, serveFile, streamTranscoded, frameThumb, listSubtitles, subtitleVtt, flushProbes } from './media.js';
 import { Analyzer } from './analysis.js';
+import { OnlineSubs, LANG_RE } from './online-subs.js';
+import { OpenSubtitlesError } from './opensubtitles.js';
+import { stripAds, retime } from './subtext.js';
+import { SubSync } from './subsync.js';
 import { openWindow } from './window.js';
 
 const PORT = Number(process.env.PORT) || 8484;
@@ -15,7 +19,19 @@ const LOOPBACK = ['127.0.0.1', 'localhost', '::1'].includes(HOST);
 const PUBLIC = path.join(ROOT, 'public');
 ensureDir(DATA_DIR);
 
-const DEFAULT_SETTINGS = { autoSkipIntro: false, autoplayNext: true, analysis: true, nextCountdown: 10 };
+// Subtitle language to search for first: the Mac's language (OpenSubtitles codes).
+function systemLanguage() {
+  try {
+    const loc = new Intl.Locale(Intl.DateTimeFormat().resolvedOptions().locale);
+    if (loc.language === 'pt') return loc.region === 'BR' ? 'pt-BR' : 'pt-PT';
+    if (loc.language === 'zh') return ['TW', 'HK', 'MO'].includes(loc.region) ? 'zh-TW' : 'zh-CN';
+    return LANG_RE.test(loc.language) ? loc.language : 'en';
+  } catch {
+    return 'en';
+  }
+}
+
+const DEFAULT_SETTINGS = { autoSkipIntro: false, autoplayNext: true, analysis: true, nextCountdown: 10, subtitleLanguage: systemLanguage(), autoFetchSubtitles: true };
 const config = new JsonStore(path.join(DATA_DIR, 'config.json'), { folders: [], settings: DEFAULT_SETTINGS });
 config.data.settings = { ...DEFAULT_SETTINGS, ...config.data.settings };
 const progress = new JsonStore(path.join(DATA_DIR, 'progress.json'), { files: {}, hidden: {} });
@@ -29,6 +45,9 @@ const analyzer = new Analyzer({
   probe,
   isEnabled: () => config.data.settings.analysis,
 });
+
+const onlineSubs = new OnlineSubs({ getTitle: (id) => titles.get(id) });
+const subsync = new SubSync();
 
 // ---- Library --------------------------------------------------------------
 
@@ -306,6 +325,7 @@ route('POST', '/api/settings', ({ res, body }) => {
     if (k in body && typeof body[k] === typeof DEFAULT_SETTINGS[k]) s[k] = body[k];
   }
   s.nextCountdown = Math.max(0, Math.min(60, Math.round(s.nextCountdown)));
+  if (!LANG_RE.test(s.subtitleLanguage)) s.subtitleLanguage = DEFAULT_SETTINGS.subtitleLanguage;
   config.save();
   if (s.analysis) analyzer.kick();
   json(res, s);
@@ -346,7 +366,8 @@ route('GET', '/api/play/:id', async ({ res, params }) => {
   if (!f) return;
   const t = titles.get(f.titleId);
   analyzer.prioritize(t.id, t.seasons[f.season]?.id);
-  const [info, subtitles] = await Promise.all([probe(f), listSubtitles(f)]);
+  const [info, subtitles] = await Promise.all([probe(f), subtitleTracks(f)]);
+  const online = onlineSubs.status();
   json(res, {
     id: f.id,
     titleId: f.titleId,
@@ -354,6 +375,7 @@ route('GET', '/api/play/:id', async ({ res, params }) => {
     ext: path.extname(f.path).slice(1).toLowerCase(),
     probe: info,
     subtitles,
+    online: { configured: online.configured, signedIn: online.signedIn },
     markers: analyzer.markers(f.id),
     progress: progress.data.files[f.id] || null,
     ffmpeg: !!FFMPEG,
@@ -375,14 +397,129 @@ route('GET', '/api/stream/:id', ({ req, res, params, query }) => {
   });
 });
 
+// Subtitle ids: x<N> file next to the video, e<N> embedded track, d<N> downloaded.
+const SUB_ID = /^[xed]\d+$/;
+
+async function subtitleTracks(f) {
+  const tracks = [...(await listSubtitles(f)), ...onlineSubs.list(f.id)];
+  return tracks.map((t) => ({ ...t, sync: subsync.get(f, t.id) }));
+}
+
+// The track without adverts, before any timing correction.
+async function plainVtt(f, subId) {
+  const vtt = subId[0] === 'd' ? await onlineSubs.vtt(f.id, Number(subId.slice(1))) : await subtitleVtt(f, subId);
+  return vtt == null ? null : stripAds(vtt).vtt;
+}
+
 route('GET', '/api/subtitle/:id/:sub', async ({ res, params }) => {
   const f = fileOr404(res, params.id);
   if (!f) return;
-  if (!/^[xe]\d+$/.test(params.sub)) return fail(res, 400, 'bad subtitle id');
-  const vtt = await subtitleVtt(f, params.sub);
+  if (!SUB_ID.test(params.sub)) return fail(res, 400, 'bad subtitle id');
+  const vtt = await plainVtt(f, params.sub);
   if (vtt == null) return fail(res, 404, 'subtitle unavailable');
   res.writeHead(200, { 'Content-Type': 'text/vtt; charset=utf-8', 'Cache-Control': 'no-store' });
-  res.end(vtt);
+  res.end(retime(vtt, subsync.get(f, params.sub) || {}));
+});
+
+route('DELETE', '/api/subtitle/:id/:sub', async ({ res, params }) => {
+  const f = fileOr404(res, params.id);
+  if (!f) return;
+  if (!/^d\d+$/.test(params.sub)) return fail(res, 400, 'Only downloaded subtitles can be removed');
+  await onlineSubs.remove(f.id, Number(params.sub.slice(1)));
+  subsync.clear(f, params.sub);
+  json(res, { subtitles: await subtitleTracks(f) });
+});
+
+// Fits a track to the dialogue (see subsync.js) and keeps the correction.
+async function syncTrack(f, subId, audio = 0) {
+  const vtt = await plainVtt(f, subId);
+  if (vtt == null) return { confident: false, applied: false, reason: 'Subtitle unavailable' };
+  const r = await subsync.align(f, subId, vtt, { audio });
+  console.log(`[subsync] ${f.name} ${subId}: offset ${r.offset ?? '-'} s, scale ${r.scale?.toFixed?.(4) ?? '-'}, z ${r.z ?? '-'}, ratio ${r.ratio ?? '-'} -> ${r.applied ? 'applied' : r.inSync ? 'in sync' : 'not applied'}`);
+  return { ...r, sync: subsync.get(f, subId) };
+}
+
+route('POST', '/api/subsync/:id/:sub', async ({ res, params, body }) => {
+  const f = fileOr404(res, params.id);
+  if (!f) return;
+  if (!SUB_ID.test(params.sub)) return fail(res, 400, 'bad subtitle id');
+  try {
+    json(res, await syncTrack(f, params.sub, Math.max(0, Number(body.audio) | 0)));
+  } catch (e) {
+    fail(res, 500, `Could not sync: ${e.message}`);
+  }
+});
+
+route('DELETE', '/api/subsync/:id/:sub', ({ res, params }) => {
+  const f = fileOr404(res, params.id);
+  if (!f) return;
+  subsync.clear(f, params.sub);
+  json(res, { sync: null });
+});
+
+// Downloads not made for this exact file are synced to the audio right away.
+async function afterDownload(f, track, audio) {
+  if (!track || track.hashMatch) return track;
+  try {
+    await syncTrack(f, track.id, audio);
+  } catch (e) {
+    console.warn('[subsync] failed:', e.message);
+  }
+  return { ...track, sync: subsync.get(f, track.id) };
+}
+
+// ---- Online subtitles (OpenSubtitles.com) ------------------------------------------
+
+const osRoute = (method, pattern, handler) =>
+  route(method, pattern, async (ctx) => {
+    try {
+      await handler(ctx);
+    } catch (e) {
+      if (!(e instanceof OpenSubtitlesError)) throw e;
+      const status = e.status === 400 || e.status === 429 ? e.status : 502;
+      fail(ctx.res, status, e.message);
+    }
+  });
+
+osRoute('GET', '/api/opensubtitles', async ({ res, query }) => {
+  json(res, query.refresh ? await onlineSubs.os.refreshUser() : onlineSubs.status());
+});
+
+osRoute('POST', '/api/opensubtitles/key', async ({ res, body }) => {
+  await onlineSubs.os.setKey(body.apiKey);
+  json(res, onlineSubs.status());
+});
+
+osRoute('POST', '/api/opensubtitles/login', async ({ res, body }) => {
+  json(res, await onlineSubs.os.login(body.username, body.password));
+});
+
+osRoute('POST', '/api/opensubtitles/logout', async ({ res }) => {
+  await onlineSubs.os.logout();
+  json(res, onlineSubs.status());
+});
+
+osRoute('GET', '/api/opensubtitles/search/:id', async ({ res, params, query }) => {
+  const f = fileOr404(res, params.id);
+  if (!f) return;
+  const language = query.language || config.data.settings.subtitleLanguage;
+  json(res, { ...(await onlineSubs.search(f, { language, query: query.query })), language, status: onlineSubs.status() });
+});
+
+osRoute('POST', '/api/opensubtitles/download/:id', async ({ res, params, body }) => {
+  const f = fileOr404(res, params.id);
+  if (!f) return;
+  const track = await afterDownload(f, await onlineSubs.fetch(f, body), Math.max(0, Number(body.audio) | 0));
+  json(res, { track, status: onlineSubs.status() });
+});
+
+osRoute('POST', '/api/opensubtitles/auto/:id', async ({ res, params, body }) => {
+  const f = fileOr404(res, params.id);
+  if (!f) return;
+  const language = LANG_RE.test(body.language || '') ? body.language : config.data.settings.subtitleLanguage;
+  const r = await onlineSubs.auto(f, language);
+  const track = r.fresh ? await afterDownload(f, r.track, Math.max(0, Number(body.audio) | 0)) : r.track && { ...r.track, sync: subsync.get(f, r.track.id) };
+  json(res, { ...r, track, status: onlineSubs.status() });
 });
 
 route('GET', '/api/art/title/:id', async ({ res, params, query }) => {
@@ -428,7 +565,7 @@ route('POST', '/api/quit', ({ res }) => {
 // ---- Start ----------------------------------------------------------------------
 
 function shutdown() {
-  for (const s of [config, progress, libraryStore, analyzer]) {
+  for (const s of [config, progress, libraryStore, analyzer, onlineSubs, subsync]) {
     try {
       s.flush();
     } catch {}

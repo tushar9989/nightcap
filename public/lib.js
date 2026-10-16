@@ -46,6 +46,21 @@ export async function loadLibrary(force = false) {
 // ---- DOM ------------------------------------------------------------------
 
 const PROPS = new Set(['value', 'checked', 'selected', 'disabled', 'hidden', 'tabIndex']);
+// Subtitle languages, as OpenSubtitles codes them.
+const SUB_LANG_CODES = ['en', 'es', 'fr', 'de', 'it', 'pt-PT', 'pt-BR', 'nl', 'sv', 'no', 'da', 'fi', 'is', 'pl', 'cs', 'sk', 'hu', 'ro', 'bg', 'el', 'tr', 'ru', 'uk', 'sr', 'hr', 'sl', 'bs', 'mk', 'sq', 'et', 'lv', 'lt', 'ar', 'he', 'fa', 'hi', 'bn', 'ta', 'te', 'ml', 'ur', 'zh-CN', 'zh-TW', 'ja', 'ko', 'th', 'vi', 'id', 'ms', 'tl'];
+const displayNames = typeof Intl.DisplayNames === 'function' ? new Intl.DisplayNames(['en'], { type: 'language' }) : null;
+export function langLabel(code) {
+  try {
+    return displayNames?.of(code) || code;
+  } catch {
+    return code;
+  }
+}
+export function subLanguages(current) {
+  const codes = current && !SUB_LANG_CODES.some((c) => c.toLowerCase() === current.toLowerCase()) ? [...SUB_LANG_CODES, current] : SUB_LANG_CODES;
+  return codes.map((code) => ({ code, name: langLabel(code) })).sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function h(tag, attrs, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {

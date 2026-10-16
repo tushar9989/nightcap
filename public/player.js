@@ -3,7 +3,7 @@
 // remux/transcode (through the server's ffmpeg) for files the browser
 // cannot play directly.
 
-import { state, api, h, ic, artBox, fmtTime, toast, loc, fileOf, progressOf, epCode, nextAfter, watchUrl } from './lib.js';
+import { state, api, h, ic, artBox, fmtTime, toast, loc, fileOf, progressOf, epCode, nextAfter, watchUrl, langLabel, subLanguages } from './lib.js';
 
 const MAX_VOLUME = 2; // 200%, like VLC
 const SAVE_EVERY_MS = 5000;
@@ -12,6 +12,16 @@ const SPEED_STOPS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 const MIN_SPEED = 0.25;
 const MAX_SPEED = 3; // browsers mute audio above 4x
 const fmtSpeed = (s) => `${+s.toFixed(2)}×`;
+const fmtDelay = (d) => (d ? `${d > 0 ? '+' : '−'}${+Math.abs(d).toFixed(2)} s` : '0 s');
+// "3.6 s earlier, frame rate fixed" for a stored correction.
+function describeSync(sync) {
+  if (!sync) return '';
+  const parts = [];
+  if (Math.abs(sync.offset) >= 0.05) parts.push(`${+Math.abs(sync.offset).toFixed(1)} s ${sync.offset < 0 ? 'earlier' : 'later'}`);
+  if (sync.scale !== 1) parts.push('frame rate fixed');
+  return parts.join(', ') || 'checked';
+}
+const fmtCount = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${+(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}K` : String(n));
 
 const store = {
   get(k, d) {
@@ -211,6 +221,9 @@ export class Player {
     this.cues = [];
     this.cueIndex = 0;
     this.subId = null;
+    this.subDelay = 0;
+    this.online = null;
+    this.syncing = null;
     this.lastTick = null;
     this.introSkipped = false;
     this.nextDismissed = false;
@@ -506,6 +519,7 @@ export class Player {
 
   async selectSubtitle(id, { remember = true } = {}) {
     this.subId = id;
+    this.subDelay = this.delayFor(id);
     this.cues = [];
     this.cueIndex = 0;
     this.subsEl.replaceChildren();
@@ -527,13 +541,59 @@ export class Player {
 
   autoSubtitles() {
     const label = store.get('subLabel', null);
-    if (!label || !this.info?.subtitles.length) return;
+    if (!label || !this.info) return;
     const lang = label.split(' ')[0].toLowerCase();
     const hit = this.info.subtitles.find((s) => s.label === label) || this.info.subtitles.find((s) => s.label.toLowerCase().startsWith(lang));
     if (hit) this.selectSubtitle(hit.id, { remember: false });
+    else if (this.info.online?.configured && state.lib?.settings?.autoFetchSubtitles) this.autoFetch();
+  }
+
+  // Watching with subtitles on, but this video has none in that language:
+  // fetch the best match online.
+  async autoFetch() {
+    const fid = this.fid;
+    const language = state.lib?.settings?.subtitleLanguage;
+    if (!language) return;
+    try {
+      const r = await api.post(`/api/opensubtitles/auto/${fid}`, { language, audio: this.audio });
+      if (this.fid !== fid || !r.track || this.subId || !store.get('subLabel', null)) return;
+      this.addTrack(r.track);
+      this.selectSubtitle(r.track.id, { remember: false });
+      this.osd(`Subtitles: ${r.track.label}`);
+    } catch (e) {
+      if (this.fid !== fid) return;
+      console.info('[subs] automatic download failed:', e.message);
+      if (/allowed|quota|limit/i.test(e.message)) toast(e.message, 6000);
+    }
+  }
+
+  addTrack(track) {
+    if (!this.info.subtitles.some((s) => s.id === track.id)) this.info.subtitles.push(track);
+  }
+
+  // ---- subtitle timing (remembered per video and track) ----------------------------------
+
+  delayFor(id) {
+    return id ? Number(store.get('subDelays', {})[`${this.fid}:${id}`]) || 0 : 0;
+  }
+
+  setSubDelay(d, { osd = true } = {}) {
+    if (!this.subId) return this.osd('Subtitles are off');
+    this.subDelay = Math.round(Math.max(-600, Math.min(600, d)) * 100) / 100;
+    const all = store.get('subDelays', {});
+    const key = `${this.fid}:${this.subId}`;
+    delete all[key];
+    if (this.subDelay) all[key] = this.subDelay;
+    const keys = Object.keys(all);
+    for (const k of keys.slice(0, Math.max(0, keys.length - 300))) delete all[k];
+    store.set('subDelays', all);
+    this.subsShown = null;
+    if (osd) this.osd(this.subDelay ? `Subtitles ${Math.abs(this.subDelay)} s ${this.subDelay > 0 ? 'later' : 'earlier'}` : 'Subtitle timing reset');
+    if (this.panelOpen === 'settings') this.renderPanel();
   }
 
   renderSubs(t) {
+    t -= this.subDelay;
     if (!this.cues.length) {
       if (this.subsShown) {
         this.subsEl.replaceChildren();
@@ -739,6 +799,7 @@ export class Player {
     this.panelEl.className = 'panel';
     if (this.panelOpen === 'episodes') return this.renderEpisodesPanel();
     if (this.panelOpen === 'speed') return this.renderSpeedPanel();
+    if (this.panelOpen === 'online') return this.renderOnlinePanel();
 
     const opt = (label, on, fn) => h('button', { class: `opt${on ? ' on' : ''}`, onclick: fn }, label);
     const cols = [];
@@ -751,9 +812,25 @@ export class Player {
           return opt(`${name}${a.channels > 2 ? ` · ${a.channels === 6 ? '5.1' : a.channels === 8 ? '7.1' : `${a.channels}ch`}` : ''}`, i === this.audio, () => this.switchAudio(i));
         })));
     }
+    const d = this.subDelay;
+    const track = this.info.subtitles.find((s) => s.id === this.subId);
     cols.push(h('div', { class: 'col' }, h('h4', {}, 'Subtitles'),
       opt('Off', !this.subId, () => this.selectSubtitle(null)),
-      this.info.subtitles.map((s) => opt(s.label, s.id === this.subId, () => this.selectSubtitle(s.id)))));
+      this.info.subtitles.map((s) => opt(s.label, s.id === this.subId, () => this.selectSubtitle(s.id))),
+      h('button', { class: 'opt more', onclick: () => this.togglePanel('online') }, 'Search online…'),
+      this.subId
+        ? h('div', { class: 'sub-timing' },
+            h('div', { class: 'muted' }, 'Timing (G / H)'),
+            h('div', { class: 'nudge' },
+              h('button', { title: 'Show subtitles earlier (G)', onclick: () => this.setSubDelay(d - 0.25, { osd: false }) }, 'Earlier'),
+              h('span', { class: 'val' }, fmtDelay(d)),
+              h('button', { title: 'Show subtitles later (H)', onclick: () => this.setSubDelay(d + 0.25, { osd: false }) }, 'Later')),
+            h('button', { class: 'sync-btn', disabled: !!this.syncing, title: 'Match the subtitles to the dialogue in the audio (runs on this Mac)', onclick: () => this.syncToAudio() },
+              this.syncing === this.subId ? 'Listening to the dialogue…' : 'Sync to dialogue'),
+            track?.sync
+              ? h('div', { class: 'muted sync-note' }, `Synced: ${describeSync(track.sync)} `, h('button', { class: 'link-btn', onclick: () => this.undoSync() }, 'Undo'))
+              : null)
+        : null));
 
     const m = this.markers;
     const now = () => Math.round(this.time * 10) / 10;
@@ -773,6 +850,181 @@ export class Player {
         h('button', { onclick: () => this.setMarkers({ intro: null }, 'Intro cleared') }, 'No intro in this episode'),
         m.manual ? h('button', { onclick: () => this.setMarkers({ reset: true }, 'Back to detected markers') }, 'Use detected markers') : null)));
     this.panelEl.replaceChildren(h('div', { class: 'cols' }, cols));
+  }
+
+  // Fits the selected track to the dialogue on the server (about 3 s).
+  async syncToAudio() {
+    const id = this.subId;
+    const fid = this.fid;
+    if (!id || this.syncing) return;
+    this.syncing = id;
+    this.renderPanel();
+    try {
+      const r = await api.post(`/api/subsync/${fid}/${id}`, { audio: this.audio });
+      if (this.fid !== fid) return;
+      const track = this.info.subtitles.find((s) => s.id === id);
+      if (track) track.sync = r.sync;
+      if (r.applied || r.inSync) {
+        this.setSubDelay(0, { osd: false });
+        if (this.subId === id) await this.selectSubtitle(id, { remember: false });
+        toast(r.applied ? `Subtitles synced: ${describeSync(r.sync)}` : 'These subtitles already match the dialogue');
+      } else {
+        toast(`${r.reason || 'Could not match these subtitles to the dialogue'}. Use Earlier / Later (G / H) instead.`, 5000);
+      }
+    } catch (e) {
+      toast(e.message, 5000);
+    } finally {
+      this.syncing = null;
+      this.renderPanel();
+    }
+  }
+
+  async undoSync() {
+    const id = this.subId;
+    try {
+      await api.del(`/api/subsync/${this.fid}/${id}`);
+      const track = this.info.subtitles.find((s) => s.id === id);
+      if (track) track.sync = null;
+      await this.selectSubtitle(id, { remember: false });
+      toast('Original subtitle timing restored');
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+
+  // ---- online subtitles (OpenSubtitles.com) ---------------------------------------------------
+
+  renderOnlinePanel() {
+    this.panelEl.className = 'panel online-panel';
+    const o = (this.online ||= { language: state.lib?.settings?.subtitleLanguage || 'en', query: '', results: null, error: null, loading: false, busy: null, status: null });
+    const back = h('button', { class: 'link-btn back', onclick: () => this.togglePanel('settings') }, ic('chevL'), 'Subtitles');
+    const credit = h('footer', {}, h('div', { class: 'os-credit' }, h('span', {}, 'Subtitles provided by ', h('a', { href: 'https://www.opensubtitles.com', target: '_blank', rel: 'noopener' }, 'OpenSubtitles.com'))));
+    if (!this.info.online?.configured) {
+      this.onlineEls = null;
+      this.panelEl.replaceChildren(
+        h('header', {}, back, h('h4', {}, 'Find subtitles online')),
+        h('div', { class: 'os-note col-note' },
+          h('p', {}, 'Marquee can find subtitles for this video on OpenSubtitles.com. It needs your own free API key first.'),
+          h('button', { class: 'btn btn-accent btn-small', onclick: () => (location.hash = '#/settings') }, 'Set up in Settings')),
+        credit);
+      return;
+    }
+    const search = () => {
+      o.query = input.value.trim();
+      this.onlineSearch();
+    };
+    const langSel = h('select', { 'aria-label': 'Language', onchange: (e) => { o.language = e.target.value; this.onlineSearch(); } },
+      subLanguages(o.language).map((l) => h('option', { value: l.code, selected: l.code.toLowerCase() === o.language.toLowerCase() }, l.name)));
+    const input = h('input', { type: 'search', value: o.query, placeholder: 'Show and episode, or film', spellcheck: false, 'aria-label': 'Search for',
+      onkeydown: (e) => {
+        if (e.key === 'Enter') search();
+        else if (e.key === 'Escape') this.closePanel();
+      } });
+    this.onlineEls = { input, list: h('div', { class: 'os-list' }), foot: credit };
+    this.panelEl.replaceChildren(
+      h('header', {}, back, h('h4', {}, 'Find subtitles online')),
+      h('div', { class: 'os-form' }, h('div', { class: 'select' }, langSel), input, h('button', { class: 'btn btn-ghost btn-small', onclick: search }, 'Search')),
+      this.onlineEls.list,
+      credit);
+    this.drawOnline();
+    if (!o.results && !o.loading && !o.error) this.onlineSearch();
+  }
+
+  drawOnline(busyText = 'Downloading…') {
+    const o = this.online;
+    const els = this.onlineEls;
+    if (!o || !els || this.panelOpen !== 'online') return;
+    let body;
+    if (o.loading) body = [h('div', { class: 'os-note' }, h('div', { class: 'spinner sm' }), 'Searching OpenSubtitles…')];
+    else if (o.error) body = [h('div', { class: 'os-note err' }, o.error)];
+    else if (o.results && !o.results.length) body = [h('div', { class: 'os-note' }, `No ${langLabel(o.language)} subtitles found. Try another search, such as the episode title.`)];
+    else body = (o.results || []).map((r) => this.resultRow(r, busyText));
+    els.list.replaceChildren(...body);
+
+    const mine = this.info.subtitles.filter((s) => s.source === 'online');
+    const st = o.status;
+    const quota = !st ? '' : st.remaining != null ? `${st.remaining} download${st.remaining === 1 ? '' : 's'} left today` : st.signedIn ? `${st.allowedDownloads ?? 'Your'} downloads a day` : '5 downloads a day without signing in';
+    els.foot.replaceChildren(
+      mine.length
+        ? h('div', { class: 'os-mine' }, h('div', { class: 'muted' }, 'Downloaded for this video'),
+            mine.map((s) => h('div', { class: 'os-track' }, h('span', {}, s.label), h('small', { title: s.release || '' }, s.release || ''),
+              h('button', { class: 'link-btn', onclick: () => this.removeTrack(s.id) }, 'Remove'))))
+        : null,
+      h('div', { class: 'os-credit' }, h('span', {}, 'Subtitles provided by ', h('a', { href: 'https://www.opensubtitles.com', target: '_blank', rel: 'noopener' }, 'OpenSubtitles.com')), h('span', {}, quota)));
+  }
+
+  resultRow(r, busyText) {
+    const o = this.online;
+    const busy = o.busy === r.id;
+    const meta = [langLabel(r.language), `${fmtCount(r.downloads)} downloads`, r.fps ? `${r.fps} fps` : '', r.uploaded ? r.uploaded.slice(0, 4) : ''].filter(Boolean).join(' · ');
+    return h('button', { class: `os-row${busy ? ' busy' : ''}`, disabled: o.busy != null, title: r.release, onclick: () => this.onlineDownload(r) },
+      h('div', { class: 'rel' }, r.release || r.fileName || 'Untitled'),
+      h('div', { class: 'meta' },
+        r.hashMatch ? h('span', { class: 'badge good', title: 'Timed for this exact video file' }, 'Made for this file') : null,
+        r.hearingImpaired ? h('span', { class: 'badge', title: 'Includes sound descriptions for the deaf and hard of hearing' }, 'SDH') : null,
+        r.foreignOnly ? h('span', { class: 'badge warn' }, 'Foreign parts only') : null,
+        r.aiTranslated ? h('span', { class: 'badge warn' }, 'AI translated') : null,
+        r.machineTranslated ? h('span', { class: 'badge warn' }, 'Machine translated') : null,
+        h('span', {}, meta),
+        busy ? h('span', { class: 'dl' }, busyText) : null));
+  }
+
+  async onlineSearch() {
+    const o = this.online;
+    const fid = this.fid;
+    if (!o) return;
+    o.loading = true;
+    o.error = null;
+    this.drawOnline();
+    try {
+      const q = new URLSearchParams({ language: o.language });
+      if (o.query) q.set('query', o.query);
+      const r = await api.get(`/api/opensubtitles/search/${fid}?${q}`);
+      if (this.fid !== fid || this.online !== o) return;
+      o.results = r.results;
+      o.status = r.status;
+      if (!o.query) {
+        o.query = r.query;
+        if (this.onlineEls) this.onlineEls.input.value = r.query;
+      }
+    } catch (e) {
+      o.error = e.message;
+      o.results = null;
+    }
+    o.loading = false;
+    this.drawOnline();
+  }
+
+  async onlineDownload(r) {
+    const o = this.online;
+    const fid = this.fid;
+    o.busy = r.id;
+    this.drawOnline(r.hashMatch ? 'Downloading…' : 'Downloading and syncing to the dialogue…');
+    try {
+      const res = await api.post(`/api/opensubtitles/download/${fid}`, { ...r, audio: this.audio });
+      if (this.fid !== fid) return;
+      o.status = res.status;
+      o.busy = null;
+      this.addTrack(res.track);
+      this.closePanel();
+      this.selectSubtitle(res.track.id);
+      toast(`Subtitles added: ${res.track.label}${res.track.sync ? ` (synced to the dialogue: ${describeSync(res.track.sync)})` : ''}`, 4000);
+    } catch (e) {
+      o.busy = null;
+      toast(e.message, 6000);
+      this.drawOnline();
+    }
+  }
+
+  async removeTrack(id) {
+    try {
+      const r = await api.del(`/api/subtitle/${this.fid}/${id}`);
+      this.info.subtitles = r.subtitles;
+      if (this.subId === id) this.selectSubtitle(null, { remember: false });
+      this.drawOnline();
+    } catch (e) {
+      toast(e.message);
+    }
   }
 
   renderSpeedPanel() {
@@ -996,6 +1248,8 @@ export class Player {
     else if (k === '}') { handled(); this.stepSpeed(1, 0.05); }
     else if (k === '{') { handled(); this.stepSpeed(-1, 0.05); }
     else if (k === '=') { handled(); this.setSpeed(1, { osd: true }); }
+    else if (k === 'g' || k === 'G') { handled(); this.setSubDelay(this.subDelay - (e.shiftKey ? 1 : 0.1)); }
+    else if (k === 'h' || k === 'H') { handled(); this.setSubDelay(this.subDelay + (e.shiftKey ? 1 : 0.1)); }
     else if (k === 'm' || k === 'M') { handled(); this.toggleMute(); }
     else if (k === 'f' || k === 'F') { handled(); this.toggleFullscreen(); }
     else if ((k === 's' || k === 'S') && !this.skipBtn.hidden) { handled(); this.skipIntro(); }

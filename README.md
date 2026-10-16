@@ -23,8 +23,12 @@ using intro/credits detection that runs entirely on your machine.
 - **Volume up to 200%** (like VLC), with a limiter so boosted audio doesn't clip harshly.
 - **Playback speed 0.25×–3×** with pitch-corrected voices, remembered across
   episodes; the speed button shows when you are not at 1×.
-- Subtitles (`.srt`/`.vtt`/`.ass` next to the video, or embedded text tracks),
-  audio-track switching, media keys / Now Playing, full screen.
+- **Subtitles** – `.srt`/`.vtt`/`.ass` next to the video and embedded text
+  tracks, plus **online search on OpenSubtitles.com** (preferring subtitles
+  timed for your exact file), optional automatic download for episodes that
+  have none, **sync to the dialogue** done locally (see below), manual timing
+  nudges, and adverts stripped from subtitle files.
+- Audio-track switching, media keys / Now Playing, full screen.
 
 ## Requirements
 
@@ -82,11 +86,41 @@ Limits: credits that roll over moving footage (some films) are not detected –
 those still count as watched at 95%. Corrections made in the player
 (**Subtitles button → Intro & credits**) are kept over detection.
 
+## Subtitles from OpenSubtitles.com
+
+Search and downloads use your own free API key: create an account on
+[opensubtitles.com](https://www.opensubtitles.com), add a consumer under
+[API consumers](https://www.opensubtitles.com/en/consumers) and paste its key
+in **Settings → Subtitles** (or set `OPENSUBTITLES_API_KEY`). Without signing
+in, a free key allows 5 downloads a day; signing in uses your account's daily
+allowance. The password is only sent to OpenSubtitles, never stored.
+
+- Each episode is searched by show, season and episode, together with the
+  file's OpenSubtitles hash, so subtitles made for that exact release come
+  first (marked *Made for this file*).
+- With **Download missing subtitles automatically** on, watching with
+  subtitles on fetches the best match for episodes that have none.
+- Downloads are kept in `data/subs-downloaded/`; your media folders are not
+  touched.
+
+**Sync to the dialogue** (runs locally, about 3 s per episode): the audio is
+turned into a speech-activity curve (voice-band energy above the local noise
+floor, 50 values a second) and correlated with the subtitle cues over offsets
+of ±3 minutes and the usual frame-rate mix-ups (23.976 / 24 / 25 fps). The
+correction is only applied when the fit clearly beats every other offset, so
+subtitles for a different cut or episode are left alone. Downloads not made
+for your exact file are synced automatically; any track can be synced from
+the Subtitles menu, undone, or nudged with G / H.
+
+Subtitles provided by [OpenSubtitles.com](https://www.opensubtitles.com).
+
 ## Your data
 
 Stored in `data/` (ignored by git): `config.json` (folders, settings),
 `progress.json` (watch progress), `library.json` (last scan),
-`analysis.json` + `fingerprints/` (detection index), `probe.json`,
+`analysis.json` + `fingerprints/` (detection index), `opensubtitles.json`
+(API key and sign-in token, readable by you only), `subs-downloaded/` +
+`subs-downloaded.json`, `subsync.json` (timing corrections), `probe.json`,
 `thumbs/`, `subs/` (caches). Delete `data/` to start fresh.
 
 The server only listens on `127.0.0.1` and rejects requests from other sites.
@@ -97,7 +131,8 @@ on a network you trust). `PORT` and `DATA_DIR` can be set the same way.
 
 Space play/pause · ←/→ 10 s (Shift: 30 s) · ↑/↓ volume (to 200%) ·
 `[` / `]` speed −/+ 0.25× (`{` / `}` fine 0.05×, `=` normal) · M mute ·
-F full screen · S skip intro · N next episode · C subtitles · 0–9 jump to 0–90% ·
+F full screen · S skip intro · N next episode · C subtitles · G / H subtitles
+0.1 s earlier / later (Shift: 1 s) · 0–9 jump to 0–90% ·
 Esc back. In the library: `/` to search.
 
 ## Development
@@ -114,6 +149,10 @@ server/
   analysis.js         detection queue + persisted index
   analysis-worker.js  worker thread: decoding, fingerprinting, credit frames
   fingerprint.js      fingerprint + matching (pure, unit-tested)
+  opensubtitles.js    OpenSubtitles.com API client, file hash
+  online-subs.js      search / download / auto-fetch for library videos
+  subsync.js          subtitle-to-dialogue sync (speech activity + correlation)
+  subtext.js          subtitle text: SRT -> WebVTT, advert removal, retiming
   window.js           opens the app window
 public/               the app (no build step, no dependencies)
 scripts/make-mac-app.sh
