@@ -404,6 +404,7 @@ route('GET', '/api/stream/:id', ({ req, res, params, query }) => {
     start: Math.max(0, Number(query.start) || 0),
     mode: query.mode === 'transcode' ? 'transcode' : 'remux',
     audio: Math.max(0, Number(query.audio) | 0),
+    abs: query.abs === '1',
   });
 });
 

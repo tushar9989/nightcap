@@ -19,10 +19,14 @@ using intro/credits detection that runs entirely on your machine.
   per-episode manual corrections from the player menu.
 - **Plays anything** – browser-friendly files play directly; others (AVI/Xvid,
   MKV with AC3/DTS, 10-bit H.264…) are repackaged or converted on the fly by
-  ffmpeg, using the Mac's hardware encoder. Seeking works either way.
+  ffmpeg, using the Mac's hardware encoder. The player keeps about a minute and
+  a half of converted video ahead (and one behind), so skipping ±10 s is
+  instant; only longer jumps start a new conversion (well under a second).
 - **Previews** – thumbnails above the seek bar while you scrub, episodes that
   play a slideshow of themselves when you rest the pointer on them (title
   page and the player's episode list), and an animated Next Episode card.
+  In the player, resting on Next shows the next episode playing its preview,
+  and resting on Episodes or Subtitles opens that menu (a click keeps it open).
   Made locally from keyframes, about a second and 2 MB per episode.
 - **Volume up to 200%** (like VLC), with a limiter so boosted audio doesn't clip harshly.
 - **Playback speed 0.25×–3×** with pitch-corrected voices, remembered across
@@ -161,5 +165,6 @@ server/
   trickplay.js        preview thumbnail sheets (seek bar, episode previews)
   window.js           opens the app window
 public/               the app (no build step, no dependencies)
+  stream.js           Media Source playback of converted streams (instant short seeks)
 scripts/make-mac-app.sh
 ```

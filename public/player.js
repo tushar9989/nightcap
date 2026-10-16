@@ -4,6 +4,7 @@
 // cannot play directly.
 
 import { state, api, h, ic, artBox, fmtTime, toast, loc, fileOf, progressOf, epCode, nextAfter, watchUrl, langLabel, subLanguages, previewOf, paintFrame, loadSheets, playPreview, previewOnHover } from './lib.js';
+import { MseStream, mseAvailable } from './stream.js';
 
 const MAX_VOLUME = 2; // 200%, like VLC
 const SAVE_EVERY_MS = 5000;
@@ -22,6 +23,22 @@ function describeSync(sync) {
   if (sync.scale !== 1) parts.push('frame rate fixed');
   return parts.join(', ') || 'checked';
 }
+
+// Opens a popup once the pointer rests on its button, and closes it once the
+// pointer has left both, with a moment to cross the gap between them.
+function hoverPopup(btn, popup, { open, close }) {
+  let timer;
+  const later = (fn, ms) => {
+    clearTimeout(timer);
+    timer = setTimeout(fn, ms);
+  };
+  btn.addEventListener('mouseenter', () => later(open, 250));
+  btn.addEventListener('mouseleave', () => later(close, 400));
+  btn.addEventListener('click', () => clearTimeout(timer));
+  popup.addEventListener('mouseenter', () => clearTimeout(timer));
+  popup.addEventListener('mouseleave', () => later(close, 400));
+}
+
 const fmtCount = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${+(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}K` : String(n));
 
 const store = {
@@ -220,6 +237,7 @@ export class Player {
   resetEpisodeState() {
     this.offset = 0;
     this.pendingSeek = null;
+    this.useMse = mseAvailable();
     this.cues = [];
     this.cueIndex = 0;
     this.subId = null;
@@ -235,6 +253,7 @@ export class Player {
     this.endedHandled = false;
     this.failures = 0;
     this.hideNext();
+    this.hidePeek();
     this.skipBtn.hidden = true;
     this.errorEl.hidden = true;
     this.subsEl.replaceChildren();
@@ -260,11 +279,18 @@ export class Player {
     const v = this.video;
     this.stopping = false;
     this.pendingSeek = null;
+    clearTimeout(this.seekTimer);
+    this.mse?.destroy();
+    this.mse = null;
     this.setLoading(true);
     if (this.mode === 'direct') {
       this.offset = 0;
       this.directStart = at;
       v.src = `/media/${this.fid}`;
+    } else if (this.useMse && this.duration > 0) {
+      this.offset = 0;
+      this.mse = new MseStream(v, { urlAt: (t) => `${this.streamUrl(t)}&abs=1`, duration: this.duration, onFatal: (e) => this.mseFailed(e) });
+      this.mse.seek(at);
     } else {
       this.offset = at;
       v.src = this.streamUrl(at);
@@ -277,6 +303,8 @@ export class Player {
   stopMedia() {
     this.stopping = true;
     clearTimeout(this.seekTimer);
+    this.mse?.destroy();
+    this.mse = null;
     const v = this.video;
     v.pause();
     v.removeAttribute('src');
@@ -293,9 +321,19 @@ export class Player {
       console.info('[player] falling back to', this.mode);
       return this.startMedia(at);
     }
+    if (this.mse) return this.mseFailed(new Error(`media error ${this.video.error?.code}`));
     if (this.failures++ < 1 && this.mode !== 'direct') return this.startMedia(at);
     const hint = this.info?.ffmpeg ? 'The file may be damaged or use a format ffmpeg cannot read.' : 'Install ffmpeg (brew install ffmpeg) so unsupported formats can be converted while playing.';
     this.showError('This video could not be played', hint);
+  }
+
+  // Media Source playback can't work for this video: stream it the plain way.
+  mseFailed(e) {
+    if (!this.mse || this.stopping) return;
+    console.info('[player] Media Source playback failed, streaming the plain way:', e.message);
+    const at = this.time;
+    this.useMse = false;
+    this.startMedia(at);
   }
 
   seek(t) {
@@ -306,6 +344,20 @@ export class Player {
     this.endedHandled = false;
     if (this.mode === 'direct') {
       this.video.currentTime = t;
+    } else if (this.mse) {
+      clearTimeout(this.seekTimer);
+      if (this.mse.canReach(t)) {
+        // Inside the video fetched so far (or just past it): jump at once.
+        this.pendingSeek = null;
+        this.mse.seek(t);
+      } else {
+        // Needs a new stream: wait for key repeats to settle first.
+        this.pendingSeek = t;
+        this.seekTimer = setTimeout(() => {
+          this.pendingSeek = null;
+          this.mse?.seek(t);
+        }, 200);
+      }
     } else {
       // Streams restart at the new position; wait for key repeats to settle.
       this.pendingSeek = t;
@@ -326,7 +378,7 @@ export class Player {
 
   togglePlay() {
     const v = this.video;
-    if (this.pendingSeek != null) {
+    if (this.pendingSeek != null && !this.mse) {
       this.wasPlaying = !this.wasPlaying;
       return;
     }
@@ -501,14 +553,19 @@ export class Player {
     const v = this.video;
     const dur = this.duration;
     if (!dur || !v.buffered.length) return;
+    // The fetched stretch around the play position.
+    let start = 0;
     let end = 0;
     for (let i = 0; i < v.buffered.length; i++) {
-      if (v.buffered.start(i) <= v.currentTime + 0.5) end = Math.max(end, v.buffered.end(i));
+      if (v.buffered.start(i) <= v.currentTime + 0.5 && v.buffered.end(i) >= v.currentTime) {
+        start = v.buffered.start(i);
+        end = v.buffered.end(i);
+      }
     }
-    const from = (this.offset / dur) * 100;
+    const from = ((this.offset + start) / dur) * 100;
     const to = Math.min(100, ((this.offset + end) / dur) * 100);
-    this.buf.style.left = `${this.mode === 'direct' ? 0 : from}%`;
-    this.buf.style.width = `${Math.max(0, to - (this.mode === 'direct' ? 0 : from))}%`;
+    this.buf.style.left = `${from}%`;
+    this.buf.style.width = `${Math.max(0, to - from)}%`;
   }
 
   checkMarkers(t) {
@@ -681,6 +738,56 @@ export class Player {
     if (this.nextEl) this.nextEl.hidden = true;
   }
 
+  // Resting on the Next button shows what comes next, with its preview playing.
+  showPeek() {
+    const next = this.nextId;
+    if (!next || !this.peekEl || (this.panelOpen && !this.panelByHover)) return;
+    if (this.panelOpen) this.closePanel();
+    const f = fileOf(next);
+    const p = progressOf(next);
+    const art = artBox(`/api/art/file/${next}?w=480`, f.name);
+    if (p && p.duration) art.append(h('div', { class: 'bar' }, h('i', { style: { width: `${p.watched ? 100 : (p.position / p.duration) * 100}%` } })));
+    this.peekEl.replaceChildren(
+      h('div', { class: 'eyebrow' }, 'Next Episode'),
+      art,
+      h('div', { class: 'info' }, h('h5', {}, `${epCode(next)} · ${f.name}`), f.duration ? h('p', {}, `${Math.round(f.duration / 60)} min`) : null));
+    this.peekEl.hidden = false;
+    const b = this.nextBtn.getBoundingClientRect();
+    const r = this.el.getBoundingClientRect();
+    const w = this.peekEl.offsetWidth;
+    this.peekEl.style.left = `${Math.max(16, Math.min(r.width - w - 16, b.left + b.width / 2 - r.left - w / 2))}px`;
+    this.peekEl.style.bottom = `${r.bottom - b.top + 12}px`;
+    this.peekStop?.();
+    this.peekStop = playPreview(art, next, { every: 900 });
+  }
+
+  hidePeek() {
+    this.peekStop?.();
+    this.peekStop = null;
+    if (this.peekEl) {
+      this.peekEl.hidden = true;
+      this.peekEl.replaceChildren();
+    }
+  }
+
+  // Resting on the Episodes or Subtitles button opens its panel. It closes
+  // again when the pointer leaves, unless the button was clicked or the panel used.
+  hoverPanel(kind) {
+    if (this.panelOpen === kind || (this.panelOpen && !this.panelByHover)) return;
+    this.togglePanel(kind);
+    this.panelByHover = true;
+  }
+
+  unhoverPanel(kind) {
+    if (this.panelByHover && this.panelOpen === kind) this.closePanel();
+  }
+
+  // A click on a button whose panel the pointer opened keeps it open.
+  clickPanel(kind) {
+    if (this.panelByHover && this.panelOpen === kind) this.panelByHover = false;
+    else this.togglePanel(kind);
+  }
+
   playNext() {
     clearInterval(this.countTimer);
     if (!this.nextId) return;
@@ -798,7 +905,9 @@ export class Player {
 
   togglePanel(kind) {
     if (this.panelOpen === kind) return this.closePanel();
+    this.hidePeek();
     this.panelOpen = kind;
+    this.panelByHover = false;
     this.panelSeason = null;
     this.renderPanel();
     this.showControls();
@@ -806,6 +915,7 @@ export class Player {
 
   closePanel() {
     this.panelOpen = null;
+    this.panelByHover = false;
     if (this.panelEl) {
       this.panelEl.hidden = true;
       this.panelEl.replaceChildren();
@@ -1107,6 +1217,8 @@ export class Player {
     this.skipBtn = h('button', { class: 'skip-btn', hidden: true, onclick: (e) => { e.stopPropagation(); this.skipIntro(); } }, ic('skip'), 'Skip Intro');
     this.nextEl = h('div', { hidden: true, onclick: (e) => e.stopPropagation() });
     this.panelEl = h('div', { class: 'panel', hidden: true, onclick: (e) => e.stopPropagation() });
+    this.panelEl.addEventListener('pointerdown', () => (this.panelByHover = false)); // used it: keep it open
+    this.peekEl = h('div', { class: 'peek', hidden: true, onclick: () => this.playNext() });
 
     // scrubber
     this.buf = h('div', { class: 'buf' });
@@ -1173,7 +1285,12 @@ export class Player {
     this.timeEl = h('div', { class: 'p-time' });
     this.midTitle = h('div', { class: 'grow' });
     this.nextBtn = h('button', { class: 'p-btn sm', title: 'Next episode (N)', onclick: () => this.playNext() }, ic('next'));
-    this.epsBtn = h('button', { class: 'p-btn sm', title: 'Episodes', onclick: () => this.togglePanel('episodes') }, ic('episodes'));
+    this.epsBtn = h('button', { class: 'p-btn sm', title: 'Episodes', onclick: () => this.clickPanel('episodes') }, ic('episodes'));
+    this.subsBtn = h('button', { class: 'p-btn sm', title: 'Audio, subtitles, intro markers', onclick: () => this.clickPanel('settings') }, ic('subtitles'));
+    hoverPopup(this.nextBtn, this.peekEl, { open: () => this.showPeek(), close: () => this.hidePeek() });
+    for (const [btn, kind] of [[this.epsBtn, 'episodes'], [this.subsBtn, 'settings']]) {
+      hoverPopup(btn, this.panelEl, { open: () => this.hoverPanel(kind), close: () => this.unhoverPanel(kind) });
+    }
     this.fsBtn = h('button', { class: 'p-btn sm', title: 'Full screen (F)', onclick: () => this.toggleFullscreen() }, ic('fullscreen'));
     this.speedLabel = h('span', { class: 'speed-badge' });
     this.speedBtn = h('button', { class: 'p-btn sm speed-btn', title: 'Playback speed ([ and ])', onclick: () => this.togglePanel('speed') }, ic('speed'), this.speedLabel);
@@ -1193,15 +1310,15 @@ export class Player {
         this.nextBtn,
         this.epsBtn,
         this.speedBtn,
-        h('button', { class: 'p-btn sm', title: 'Audio, subtitles, intro markers', onclick: () => this.togglePanel('settings') }, ic('subtitles')),
+        this.subsBtn,
         this.fsBtn));
-    for (const bar of [top, bottom]) {
+    for (const bar of [top, bottom, this.peekEl]) {
       bar.addEventListener('mouseenter', () => (this.hoveringControls = true));
       bar.addEventListener('mouseleave', () => (this.hoveringControls = false));
       bar.addEventListener('click', (e) => e.stopPropagation());
     }
 
-    this.el = h('div', { class: 'player' }, v, this.subsEl, this.centerEl, top, bottom, this.skipBtn, this.nextEl, this.panelEl, this.errorEl);
+    this.el = h('div', { class: 'player' }, v, this.subsEl, this.centerEl, top, bottom, this.skipBtn, this.nextEl, this.peekEl, this.panelEl, this.errorEl);
     this.root.replaceChildren(this.el);
 
     // Click toggles play, double-click toggles full screen.

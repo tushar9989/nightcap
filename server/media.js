@@ -99,11 +99,23 @@ async function hardwareEncoderWorks() {
   return (vtOk = r.code === 0);
 }
 
+// Bitrate for converted video, by picture size: about 0.4 bits per pixel at
+// 24 fps, so a 624x464 DVD rip gets ~2.9 Mbit/s (SSIM 0.994 against the
+// source) instead of a flat 8 Mbit/s, and HD stays at 8.
+function videoKbps(v) {
+  if (!v?.width || !v?.height) return 8000;
+  const w = Math.min(1920, v.width);
+  const h = (v.height * w) / v.width;
+  return Math.round(Math.min(8000, Math.max(2000, (w * h * 10) / 1000)));
+}
+
 // Streams the file through ffmpeg as fragmented MP4.
 //   mode "remux": keep the video as is, convert audio to AAC (cheap)
 //   mode "transcode": re-encode video to H.264 too
-// Seeking is done by the player requesting a new stream at `start`.
-export async function streamTranscoded(req, res, file, { start = 0, mode = 'remux', audio = 0 }) {
+// Seeking is done by the player requesting a new stream at `start`. With
+// `abs` the stream keeps the video's own timestamps (the player's Media Source
+// buffer lines streams up by them); otherwise it starts at 0.
+export async function streamTranscoded(req, res, file, { start = 0, mode = 'remux', audio = 0, abs = false }) {
   if (!FFMPEG) {
     res.writeHead(501);
     return res.end('ffmpeg is not installed');
@@ -114,7 +126,10 @@ export async function streamTranscoded(req, res, file, { start = 0, mode = 'remu
   if (start > 0) args.push('-ss', String(start));
   args.push('-i', file.path, '-map', '0:v:0', '-map', `0:a:${audio}?`, '-sn', '-dn', '-map_chapters', '-1');
   if (mode === 'transcode') {
-    if (await hardwareEncoderWorks()) args.push('-c:v', 'h264_videotoolbox', '-b:v', '8M', '-maxrate', '12M', '-bufsize', '16M', '-pix_fmt', 'yuv420p');
+    if (await hardwareEncoderWorks()) {
+      const kbps = videoKbps(info?.video);
+      args.push('-c:v', 'h264_videotoolbox', '-b:v', `${kbps}k`, '-maxrate', `${Math.round(kbps * 1.5)}k`, '-bufsize', `${kbps * 2}k`, '-pix_fmt', 'yuv420p');
+    }
     else args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p');
     args.push('-vf', "scale='min(1920,iw)':-2", '-g', '96');
   } else {
@@ -123,7 +138,10 @@ export async function streamTranscoded(req, res, file, { start = 0, mode = 'remu
   }
   if (a && a.codec === 'aac' && (a.channels || 2) <= 6) args.push('-c:a', 'copy');
   else args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2');
-  args.push('-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1');
+  // Half-second fragments: the first frames reach the player sooner than
+  // whole-GOP fragments would (about 0.2 s instead of 0.4 s after a seek).
+  if (abs) args.push('-output_ts_offset', String(start), '-avoid_negative_ts', 'make_non_negative');
+  args.push('-movflags', `empty_moov+default_base_moof${abs ? '+frag_discont' : ''}`, '-frag_duration', '500000', '-f', 'mp4', 'pipe:1');
 
   const child = spawn(FFMPEG, args, { stdio: ['ignore', 'pipe', 'pipe'] });
   let err = '';
