@@ -1,6 +1,6 @@
 import {
   state, api, h, ic, artBox, fmtDur, fmtTime, toast, loadLibrary, setLibrary, loc, fileOf, progressOf, markersOf,
-  epCode, playOrder, nextUp, nextUpLabel, continueWatching, watchUrl, subLanguages,
+  epCode, playOrder, nextUp, nextUpLabel, continueWatching, watchUrl, subLanguages, previewOnHover,
 } from './lib.js';
 import { Player } from './player.js';
 
@@ -231,6 +231,7 @@ function openTitle(id, { season: seasonParam } = {}) {
           t.seasons.map((s, i) => h('option', { value: i, selected: i === seasonIdx }, `${s.name} (${s.episodes.length})`))))
       : null;
     const seasonWatched = season.episodes.every((fid) => progressOf(fid)?.watched);
+    api.post('/api/previews/prioritize', { fileIds: season.episodes }).catch(() => {});
     listEl.replaceChildren(
       h('div', { class: 'ep-head' }, h('h2', {}, isShow ? 'Episodes' : 'Parts'), h('div', { class: 'btns' },
         h('button', { class: 'link-btn', onclick: async () => { await setWatched(season.episodes, !seasonWatched); draw(); } }, seasonWatched ? 'Mark season unwatched' : 'Mark season watched'),
@@ -246,11 +247,13 @@ function openTitle(id, { season: seasonParam } = {}) {
           await setWatched([fid], !p?.watched);
           draw();
         } }, ic('check'));
-        return h('div', { class: `ep${fid === nu.fileId ? ' current' : ''}`, onclick: () => (location.hash = watchUrl(fid)) },
+        const row = h('div', { class: `ep${fid === nu.fileId ? ' current' : ''}`, onclick: () => (location.hash = watchUrl(fid)) },
           h('div', { class: 'num' }, f.number ?? ''),
           art,
           h('div', {}, h('h3', {}, h('span', {}, f.name), h('span', { class: 'dur' }, fmtDur(f.duration))), markerTags(fid)),
           toggle);
+        previewOnHover(art, fid, row);
+        return row;
       })));
   }
   draw();
@@ -384,6 +387,7 @@ function renderSettings() {
   });
 
   const analysisBox = h('div');
+  const previewsBox = h('div');
   const countdown = h('select', { onchange: async (e) => {
     state.lib.settings = await api.post('/api/settings', { nextCountdown: Number(e.target.value) });
   } }, [5, 10, 15, 20, 30].map((n) => h('option', { value: n, selected: lib.settings.nextCountdown === n }, `${n} seconds`)));
@@ -408,6 +412,11 @@ function renderSettings() {
       h('p', {}, 'Runs on this Mac. Each episode’s opening and closing minutes are turned into an audio fingerprint and compared with the other episodes of its season: music they share is the intro or the end credits. Movies (and shows without a shared end theme) are checked for text-on-black credits. Fingerprints and results are saved, so only new episodes are ever analysed.'),
       toggle('Detect intros and credits', 'Uses some CPU in the background while new episodes are analysed.', 'analysis'),
       analysisBox),
+    h('section', { class: 'section' },
+      h('h2', {}, 'Preview thumbnails'),
+      h('p', {}, 'A frame every few seconds of each episode and film, made on this Mac from keyframes (about a second per episode). They show above the seek bar while you scrub, play as previews when you rest the pointer on an episode, and preview the next episode at the end credits.'),
+      toggle('Make preview thumbnails', 'Runs in the background; what you open or play is done first. About 2 MB per episode.', 'previews'),
+      previewsBox),
     h('section', { class: 'section' },
       h('h2', {}, 'Playback'),
       toggle('Skip intros automatically', 'Otherwise a Skip Intro button appears during the intro.', 'autoSkipIntro'),
@@ -436,8 +445,23 @@ function renderSettings() {
         a.current ? `Analysing ${a.current.label} (${a.current.done}/${a.current.total})… ${a.analyzedFiles} of ${a.totalFiles} done` :
         a.analyzedFiles >= a.totalFiles ? `All ${a.totalFiles} videos analysed.` : `${a.analyzedFiles} of ${a.totalFiles} analysed.`));
   };
-  page.drawStatus = drawStatus;
-  drawStatus();
+  const drawPreviews = () => {
+    const p = state.status?.previews;
+    if (!p) return;
+    const pct = p.total ? (p.done / p.total) * 100 : 0;
+    const size = p.bytes >= 1e9 ? `${(p.bytes / 1e9).toFixed(1)} GB` : `${Math.round(p.bytes / 1e6)} MB`;
+    previewsBox.replaceChildren(
+      h('div', { class: 'progress-line' }, h('i', { style: { width: `${pct}%` } })),
+      h('div', { class: 'muted' },
+        !p.available ? 'Needs ffmpeg.' :
+        p.current && p.enabled ? `Making previews for ${p.current}… ${p.done} of ${p.total} done · ${size}` :
+        `${p.done} of ${p.total} videos have previews · ${size}${!p.enabled ? ' · paused' : ''}`));
+  };
+  page.drawStatus = () => {
+    drawStatus();
+    drawPreviews();
+  };
+  page.drawStatus();
 }
 
 // ---- Folder picker ---------------------------------------------------------------------
@@ -575,6 +599,9 @@ async function pollStatus() {
     } else if (a.current && a.enabled) {
       activity.hidden = false;
       activity.textContent = `Detecting intros · ${a.analyzedFiles}/${a.totalFiles}`;
+    } else if (state.status.previews?.current && state.status.previews.enabled) {
+      activity.hidden = false;
+      activity.textContent = `Making previews · ${state.status.previews.done}/${state.status.previews.total}`;
     } else activity.hidden = true;
     page.drawStatus?.();
     // Pick up new markers/library changes when the user is not mid-interaction.

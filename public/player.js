@@ -3,11 +3,12 @@
 // remux/transcode (through the server's ffmpeg) for files the browser
 // cannot play directly.
 
-import { state, api, h, ic, artBox, fmtTime, toast, loc, fileOf, progressOf, epCode, nextAfter, watchUrl, langLabel, subLanguages } from './lib.js';
+import { state, api, h, ic, artBox, fmtTime, toast, loc, fileOf, progressOf, epCode, nextAfter, watchUrl, langLabel, subLanguages, previewOf, paintFrame, loadSheets, playPreview, previewOnHover } from './lib.js';
 
 const MAX_VOLUME = 2; // 200%, like VLC
 const SAVE_EVERY_MS = 5000;
 const HIDE_AFTER_MS = 3000;
+const SEEK_THUMB_WIDTH = 220; // css px of the seek-bar preview
 const SPEED_STOPS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 const MIN_SPEED = 0.25;
 const MAX_SPEED = 3; // browsers mute audio above 4x
@@ -190,6 +191,7 @@ export class Player {
       start = p && !p.watched && p.position > 5 && (!this.duration || p.position < this.duration - 10) ? p.position - 2 : 0;
     }
     this.startMedia(Math.max(0, start));
+    this.loadPreviews(fid);
     this.autoSubtitles();
     this.updateMediaSession();
   }
@@ -224,6 +226,7 @@ export class Player {
     this.subDelay = 0;
     this.online = null;
     this.syncing = null;
+    this.trick = null;
     this.lastTick = null;
     this.introSkipped = false;
     this.nextDismissed = false;
@@ -330,6 +333,20 @@ export class Player {
     if (v.paused) v.play().catch(() => {});
     else v.pause();
     this.flash(v.paused ? 'pause' : 'play');
+  }
+
+  // Seek-bar thumbnails: made in the background on first play (about a
+  // second per episode), so keep asking until they exist.
+  async loadPreviews(fid, tries = 0) {
+    const m = await previewOf(fid);
+    if (this.fid !== fid) return;
+    if (!m) {
+      if (tries < 60) setTimeout(() => this.loadPreviews(fid, tries + 1), 3000);
+      return;
+    }
+    this.trick = m;
+    const sheets = Array.from({ length: m.sheets }, (_, n) => n * m.cols * m.rows * m.interval);
+    loadSheets(m, fid, sheets);
   }
 
   // ---- volume (0..200%) ------------------------------------------------------------
@@ -622,14 +639,16 @@ export class Player {
     const f = fileOf(next);
     const fillEl = h('i');
     const go = h('button', { class: 'btn btn-play count', onclick: () => this.playNext() }, fillEl, ic('play'), 'Next Episode');
+    const art = artBox(`/api/art/file/${next}?w=480`, f.name);
     const card = h('div', { class: 'next-card' },
-      artBox(`/api/art/file/${next}?w=480`, f.name),
+      art,
       h('div', { class: 'info' },
         h('div', { class: 'eyebrow' }, `Up next · ${epCode(next)}`),
         h('h3', {}, f.name),
         h('div', { class: 'acts' }, go, h('button', { class: 'btn btn-ghost', onclick: () => this.dismissNext() }, 'Watch Credits'))));
     this.nextEl.replaceChildren(card);
     this.nextEl.hidden = false;
+    playPreview(art, next); // stops by itself once the card is gone
     clearInterval(this.countTimer);
     if (countdown > 0) {
       // The countdown only runs while the video plays (or has ended).
@@ -1053,10 +1072,13 @@ export class Player {
       const p = progressOf(fid);
       const art = artBox(`/api/art/file/${fid}?w=320`, f.name);
       if (p && p.duration) art.append(h('div', { class: 'bar' }, h('i', { style: { width: `${p.watched ? 100 : (p.position / p.duration) * 100}%` } })));
-      return h('div', { class: `row-ep${fid === this.fid ? ' current' : ''}`, onclick: () => { this.closePanel(); location.replace(watchUrl(fid)); } },
+      const row = h('div', { class: `row-ep${fid === this.fid ? ' current' : ''}`, onclick: () => { this.closePanel(); location.replace(watchUrl(fid)); } },
         art, h('div', {}, h('h5', {}, `${f.number != null ? `${f.number}. ` : ''}${f.name}`), h('p', {}, f.duration ? `${Math.round(f.duration / 60)} min` : '')));
+      previewOnHover(art, fid, row);
+      return row;
     });
     this.panelEl.replaceChildren(h('header', {}, h('h4', {}, t.name), sel), ...rows);
+    api.post('/api/previews/prioritize', { fileIds: t.seasons[season].episodes }).catch(() => {});
     const cur = this.panelEl.querySelector('.current');
     if (cur) cur.scrollIntoView({ block: 'center' });
   }
@@ -1091,7 +1113,9 @@ export class Player {
     this.segs = h('div');
     this.fill = h('div', { class: 'fill' });
     this.knob = h('div', { class: 'knob' });
-    this.tip = h('div', { class: 'tip' });
+    this.tipThumb = h('div', { class: 'tip-thumb', hidden: true });
+    this.tipText = h('span');
+    this.tip = h('div', { class: 'tip' }, this.tipThumb, this.tipText);
     const rail = h('div', { class: 'rail' }, this.buf, this.segs, this.fill, this.knob);
     const scrub = h('div', { class: 'scrub' }, rail, this.tip);
     const posAt = (e) => {
@@ -1103,8 +1127,18 @@ export class Player {
       const r = rail.getBoundingClientRect();
       const m = this.markers || {};
       const where = m.intro && t >= m.intro.start && t < m.intro.end ? ' · Intro' : m.credits && t >= m.credits.start ? ' · Credits' : '';
-      this.tip.textContent = fmtTime(t) + where;
-      this.tip.style.left = `${Math.max(30, Math.min(r.width - 30, e.clientX - r.left))}px`;
+      this.tipText.textContent = fmtTime(t) + where;
+      const trick = this.trick;
+      let half = 30;
+      if (trick) {
+        const scale = SEEK_THUMB_WIDTH / trick.width;
+        this.tipThumb.hidden = false;
+        this.tipThumb.style.width = `${SEEK_THUMB_WIDTH}px`;
+        this.tipThumb.style.height = `${Math.round(trick.height * scale)}px`;
+        paintFrame(this.tipThumb, trick, this.fid, t, scale);
+        half = SEEK_THUMB_WIDTH / 2 + 4;
+      } else this.tipThumb.hidden = true;
+      this.tip.style.left = `${Math.max(half, Math.min(r.width - half, e.clientX - r.left))}px`;
       if (this.dragging) {
         this.dragT = t;
         const pct = (t / this.duration) * 100;

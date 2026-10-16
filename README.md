@@ -20,6 +20,10 @@ using intro/credits detection that runs entirely on your machine.
 - **Plays anything** – browser-friendly files play directly; others (AVI/Xvid,
   MKV with AC3/DTS, 10-bit H.264…) are repackaged or converted on the fly by
   ffmpeg, using the Mac's hardware encoder. Seeking works either way.
+- **Previews** – thumbnails above the seek bar while you scrub, episodes that
+  play a slideshow of themselves when you rest the pointer on them (title
+  page and the player's episode list), and an animated Next Episode card.
+  Made locally from keyframes, about a second and 2 MB per episode.
 - **Volume up to 200%** (like VLC), with a limiter so boosted audio doesn't clip harshly.
 - **Playback speed 0.25×–3×** with pitch-corrected voices, remembered across
   episodes; the speed button shows when you are not at 1×.
@@ -119,7 +123,8 @@ Subtitles provided by [OpenSubtitles.com](https://www.opensubtitles.com).
 Stored in `data/` (ignored by git): `config.json` (folders, settings),
 `progress.json` (watch progress), `library.json` (last scan),
 `analysis.json` + `fingerprints/` (detection index), `opensubtitles.json`
-(API key and sign-in token, readable by you only), `subs-downloaded/` +
+(API key and sign-in token, readable by you only), `trickplay/` (preview
+thumbnails), `subs-downloaded/` +
 `subs-downloaded.json`, `subsync.json` (timing corrections), `probe.json`,
 `thumbs/`, `subs/` (caches). Delete `data/` to start fresh.
 
@@ -153,6 +158,7 @@ server/
   online-subs.js      search / download / auto-fetch for library videos
   subsync.js          subtitle-to-dialogue sync (speech activity + correlation)
   subtext.js          subtitle text: SRT -> WebVTT, advert removal, retiming
+  trickplay.js        preview thumbnail sheets (seek bar, episode previews)
   window.js           opens the app window
 public/               the app (no build step, no dependencies)
 scripts/make-mac-app.sh

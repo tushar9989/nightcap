@@ -11,6 +11,7 @@ import { OnlineSubs, LANG_RE } from './online-subs.js';
 import { OpenSubtitlesError } from './opensubtitles.js';
 import { stripAds, retime } from './subtext.js';
 import { SubSync } from './subsync.js';
+import { Trickplay } from './trickplay.js';
 import { openWindow } from './window.js';
 
 const PORT = Number(process.env.PORT) || 8484;
@@ -31,7 +32,7 @@ function systemLanguage() {
   }
 }
 
-const DEFAULT_SETTINGS = { autoSkipIntro: false, autoplayNext: true, analysis: true, nextCountdown: 10, subtitleLanguage: systemLanguage(), autoFetchSubtitles: true };
+const DEFAULT_SETTINGS = { autoSkipIntro: false, autoplayNext: true, analysis: true, nextCountdown: 10, subtitleLanguage: systemLanguage(), autoFetchSubtitles: true, previews: true };
 const config = new JsonStore(path.join(DATA_DIR, 'config.json'), { folders: [], settings: DEFAULT_SETTINGS });
 config.data.settings = { ...DEFAULT_SETTINGS, ...config.data.settings };
 const progress = new JsonStore(path.join(DATA_DIR, 'progress.json'), { files: {}, hidden: {} });
@@ -48,6 +49,7 @@ const analyzer = new Analyzer({
 
 const onlineSubs = new OnlineSubs({ getTitle: (id) => titles.get(id) });
 const subsync = new SubSync();
+const trickplay = new Trickplay({ getLibrary: () => library, probe, isEnabled: () => config.data.settings.previews });
 
 // ---- Library --------------------------------------------------------------
 
@@ -62,6 +64,7 @@ function rescan() {
     libraryStore.save();
     console.log(`[scan] ${lib.titles.length} titles, ${Object.keys(lib.files).length} videos (${Date.now() - t0} ms)`);
     analyzer.sync();
+    trickplay.sync();
     warmProbes();
   })()
     .catch((e) => console.error('[scan] failed:', e))
@@ -251,7 +254,7 @@ const fileOr404 = (res, id) => {
 
 route('GET', '/api/ping', ({ res }) => json(res, { ok: true, app: 'marquee' }));
 route('GET', '/api/library', ({ res }) => json(res, libraryPayload()));
-route('GET', '/api/status', ({ res }) => json(res, { scanning: !!scanning, analysis: analyzer.status(), folderStatus: library.folderStatus, ffmpeg: !!FFMPEG }));
+route('GET', '/api/status', ({ res }) => json(res, { scanning: !!scanning, analysis: analyzer.status(), previews: trickplay.status(), folderStatus: library.folderStatus, ffmpeg: !!FFMPEG }));
 
 route('POST', '/api/scan', async ({ res }) => {
   await rescan();
@@ -328,6 +331,7 @@ route('POST', '/api/settings', ({ res, body }) => {
   if (!LANG_RE.test(s.subtitleLanguage)) s.subtitleLanguage = DEFAULT_SETTINGS.subtitleLanguage;
   config.save();
   if (s.analysis) analyzer.kick();
+  trickplay.sync();
   json(res, s);
 });
 
@@ -366,6 +370,12 @@ route('GET', '/api/play/:id', async ({ res, params }) => {
   if (!f) return;
   const t = titles.get(f.titleId);
   analyzer.prioritize(t.id, t.seasons[f.season]?.id);
+  // Previews for this video first, then the episodes after it (Next Episode card).
+  const eps = t.seasons[f.season]?.episodes || [];
+  const i = eps.indexOf(f.id);
+  const nextSeason = t.seasons[f.season + 1];
+  const nextSeasonStart = nextSeason && !nextSeason.extras ? nextSeason.episodes.slice(0, 1) : [];
+  trickplay.prioritize([f.id, ...eps.slice(i + 1), ...nextSeasonStart, ...eps.slice(0, i)]);
   const [info, subtitles] = await Promise.all([probe(f), subtitleTracks(f)]);
   const online = onlineSubs.status();
   json(res, {
@@ -554,6 +564,33 @@ route('POST', '/api/analyze/:titleId', ({ res, params }) => {
 
 route('POST', '/api/analysis/prioritize', ({ res, body }) => {
   analyzer.prioritize(body.titleId, body.seasonId);
+  json(res, { ok: true });
+});
+
+// ---- Preview thumbnails --------------------------------------------------------------
+
+route('GET', '/api/trickplay/:id', ({ res, params }) => {
+  const f = fileOr404(res, params.id);
+  if (!f) return;
+  const m = trickplay.manifest(f);
+  if (m) return json(res, { ready: true, ...m });
+  trickplay.prioritize([f.id]);
+  json(res, { ready: false, state: trickplay.state(f) });
+});
+
+route('GET', '/api/trickplay/:id/:n', ({ res, params }) => {
+  const f = fileOr404(res, params.id);
+  if (!f) return;
+  const file = trickplay.sheetPath(f, Number(params.n));
+  if (!file) return fail(res, 404, 'no such preview sheet');
+  // Sheet URLs carry the file's signature (?k=), so they can be cached for good.
+  res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'max-age=31536000, immutable' });
+  fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
+});
+
+// The episodes someone is looking at get their previews first.
+route('POST', '/api/previews/prioritize', ({ res, body }) => {
+  trickplay.prioritize((Array.isArray(body.fileIds) ? body.fileIds : []).slice(0, 100).map(String));
   json(res, { ok: true });
 });
 

@@ -235,3 +235,117 @@ export function continueWatching() {
 export function watchUrl(fid, start) {
   return `#/watch/${fid}${start != null ? `?t=${Math.floor(start)}` : ''}`;
 }
+
+// ---- Preview thumbnails (sheets of frames, see server/trickplay.js) ------------------------
+
+const previews = new Map(); // fileId -> { at, value } or { promise }
+
+// The preview index of a video, or null while it is being made.
+export function previewOf(fid) {
+  const c = previews.get(fid);
+  if (c?.value) return Promise.resolve(c.value);
+  if (c?.promise) return c.promise;
+  if (c && Date.now() - c.at < 2500) return Promise.resolve(null);
+  const promise = api.get(`/api/trickplay/${fid}`)
+    .then((m) => (m.ready ? m : null), () => null)
+    .then((value) => {
+      previews.set(fid, { at: Date.now(), value });
+      return value;
+    });
+  previews.set(fid, { promise });
+  return promise;
+}
+
+function frameAt(m, fid, t) {
+  const i = Math.max(0, Math.min(m.count - 1, Math.round(t / m.interval)));
+  const per = m.cols * m.rows;
+  const k = i % per;
+  return { url: `/api/trickplay/${fid}/${Math.floor(i / per)}?k=${m.key}`, x: (k % m.cols) * m.width, y: Math.floor(k / m.cols) * m.height };
+}
+
+const loadedSheets = new Map();
+export function loadSheets(m, fid, times) {
+  const urls = [...new Set(times.map((t) => frameAt(m, fid, t).url))];
+  return Promise.all(urls.map((url) => {
+    if (!loadedSheets.has(url)) {
+      const img = new Image();
+      loadedSheets.set(url, new Promise((r) => {
+        img.onload = img.onerror = () => r(img);
+      }));
+      img.src = url;
+    }
+    return loadedSheets.get(url);
+  }));
+}
+
+// Paints the frame nearest to `t` into el, drawn at `scale`.
+export function paintFrame(el, m, fid, t, scale = 1) {
+  const f = frameAt(m, fid, t);
+  el.style.backgroundImage = `url("${f.url}")`;
+  el.style.backgroundSize = `${m.cols * m.width * scale}px ${m.rows * m.height * scale}px`;
+  el.style.backgroundPosition = `${-f.x * scale}px ${-f.y * scale}px`;
+}
+
+// Moments worth showing: spread over the video, after the intro and before the credits.
+function previewTimes(fid, m, n = 12) {
+  const dur = (m.count - 1) * m.interval;
+  const mk = state.lib?.markers?.[fid] || {};
+  const from = Math.max(mk.intro?.end ?? 0, dur * 0.04);
+  const to = Math.min(mk.credits?.start ?? dur, dur * 0.94);
+  return Array.from({ length: n }, (_, i) => from + ((to - from) * (i + 0.5)) / n);
+}
+
+// A slideshow of the video inside an art box, cropped to fill it. Returns stop().
+export function playPreview(box, fid, { every = 1100 } = {}) {
+  let stopped = false;
+  let timer;
+  let layer;
+  const stop = () => {
+    stopped = true;
+    clearTimeout(timer);
+    layer?.remove();
+  };
+  (async () => {
+    const m = await previewOf(fid);
+    if (stopped || !m || !box.isConnected) return;
+    const times = previewTimes(fid, m);
+    await loadSheets(m, fid, times);
+    if (stopped || !box.isConnected) return;
+    const w = box.clientWidth;
+    const bh = box.clientHeight;
+    const scale = Math.max(w / m.width, bh / m.height);
+    const frames = [h('i'), h('i')].map((el) => {
+      Object.assign(el.style, { width: `${m.width * scale}px`, height: `${m.height * scale}px`, left: `${(w - m.width * scale) / 2}px`, top: `${(bh - m.height * scale) / 2}px` });
+      return el;
+    });
+    layer = h('div', { class: 'preview' }, frames);
+    // Above the poster image, below overlays such as the progress bar.
+    box.insertBefore(layer, [...box.children].find((c) => c.tagName !== 'IMG') || null);
+    let i = 0;
+    const next = () => {
+      if (stopped || !box.isConnected) return stop();
+      const incoming = frames[i % 2];
+      paintFrame(incoming, m, fid, times[i % times.length], scale);
+      incoming.classList.add('on');
+      frames[(i + 1) % 2].classList.remove('on');
+      i++;
+      timer = setTimeout(next, every);
+    };
+    next();
+  })();
+  return stop;
+}
+
+// Plays the preview while the pointer rests on `trigger` (the box by default).
+export function previewOnHover(box, fid, trigger = box) {
+  let stop = null;
+  let wait;
+  trigger.addEventListener('mouseenter', () => {
+    wait = setTimeout(() => (stop = playPreview(box, fid)), 300);
+  });
+  trigger.addEventListener('mouseleave', () => {
+    clearTimeout(wait);
+    stop?.();
+    stop = null;
+  });
+}
