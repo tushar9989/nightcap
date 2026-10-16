@@ -1,6 +1,7 @@
 #!/bin/bash
-# Builds Marquee.app: double-click it to start the Marquee engine (if it is
-# not already running) and open the app window.
+# Builds Marquee.app: double-click it to start Marquee and open its window.
+# Closing the window (or quitting/killing that browser) quits Marquee and
+# everything it runs; a Marquee left over from older code is replaced.
 #
 #   scripts/make-mac-app.sh            -> ~/Applications/Marquee.app
 #   scripts/make-mac-app.sh /some/dir  -> /some/dir/Marquee.app
@@ -45,15 +46,22 @@ NODE="$NODE"
 PORT="\${PORT:-8484}"
 URL="http://localhost:\$PORT"
 export PATH="/opt/homebrew/bin:/usr/local/bin:\$PATH"
-if ! curl -fs "\$URL/api/ping" | grep -q marquee; then
-  mkdir -p "\$ROOT/data"
-  nohup "\$NODE" "\$ROOT/server/index.js" --no-open >> "\$ROOT/data/server.log" 2>&1 &
-  for _ in \$(seq 1 100); do
-    curl -fs "\$URL/api/ping" >/dev/null 2>&1 && break
+# The version of the server code on disk (CODE_STAMP in server/index.js).
+CODE="\$(stat -f %m "\$ROOT"/server/*.js "\$ROOT/package.json" | sort -n | tail -1)"
+PING="\$(curl -fs --max-time 2 "\$URL/api/ping" || true)"
+if [[ "\$PING" == *'"app":"marquee"'* ]]; then
+  # Already running this code: open another window.
+  if [[ "\$PING" == *"\"code\":\$CODE}"* ]] && curl -fs -X POST -H "Content-Type: application/json" -d "{}" "\$URL/api/window" >/dev/null; then exit 0; fi
+  # Left over from older code: replace it.
+  curl -fs -X POST -H "Content-Type: application/json" -d "{}" "\$URL/api/quit" >/dev/null || true
+  for _ in \$(seq 1 50); do
+    curl -fs --max-time 0.3 "\$URL/api/ping" >/dev/null 2>&1 || break
     sleep 0.1
   done
 fi
-exec "\$NODE" "\$ROOT/server/window.js" "\$URL"
+mkdir -p "\$ROOT/data"
+# The server opens the window itself and quits when it closes.
+nohup "\$NODE" "\$ROOT/server/index.js" >> "\$ROOT/data/server.log" 2>&1 &
 LAUNCHER
 chmod +x "$APP/Contents/MacOS/Marquee"
 

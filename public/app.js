@@ -613,5 +613,9 @@ async function pollStatus() {
   setTimeout(pollStatus, page.base === 'settings' ? 2000 : 6000);
 }
 
+// While this page is open the server keeps running; it quits a few seconds
+// after the last page closes (see "Lifetime" in server/index.js).
+new EventSource('/api/session');
+
 route();
 pollStatus();

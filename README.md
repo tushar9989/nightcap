@@ -53,9 +53,12 @@ npm start                    # starts the engine and opens the app window
 scripts/make-mac-app.sh      # builds ~/Applications/Marquee.app (Dock/Spotlight launcher)
 ```
 
-`Marquee.app` starts the engine in the background if it is not running and
-opens the window. The engine keeps running after you close the window (so new
-episodes keep being analysed); stop it from **Settings → Stop Marquee**.
+Marquee runs as long as its window: closing the window, or quitting or
+force-quitting its browser, stops the engine a few seconds later along with
+everything it was running (conversions, detection, previews). Opening the app
+again starts it fresh; if an engine from older code is still running, the app
+replaces it. `node server/index.js --no-open` runs the engine on its own, with
+no window, until you stop it (for development).
 macOS will ask once for permission when a folder lives in Downloads, Desktop or
 Documents.
 

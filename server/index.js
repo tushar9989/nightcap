@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { ROOT, DATA_DIR, FFMPEG, FFPROBE, JsonStore, ensureDir, hashId, naturalCompare } from './util.js';
 import { scanLibrary } from './scanner.js';
 import { probe, cachedProbe, serveFile, streamTranscoded, frameThumb, listSubtitles, subtitleVtt, flushProbes } from './media.js';
@@ -252,7 +253,11 @@ const fileOr404 = (res, id) => {
 
 // ---- Routes ------------------------------------------------------------------------
 
-route('GET', '/api/ping', ({ res }) => json(res, { ok: true, app: 'marquee' }));
+// `code` tells the launcher which version of the server code is running, so a
+// server left over from older code gets replaced (scripts/make-mac-app.sh).
+const CODE_STAMP = Math.max(...[...fs.readdirSync(path.join(ROOT, 'server')).filter((n) => n.endsWith('.js')).map((n) => path.join(ROOT, 'server', n)), path.join(ROOT, 'package.json')]
+  .map((f) => Math.floor(fs.statSync(f).mtimeMs / 1000)));
+route('GET', '/api/ping', ({ res }) => json(res, { ok: true, app: 'marquee', code: CODE_STAMP }));
 route('GET', '/api/library', ({ res }) => json(res, libraryPayload()));
 route('GET', '/api/status', ({ res }) => json(res, { scanning: !!scanning, analysis: analyzer.status(), previews: trickplay.status(), folderStatus: library.folderStatus, ffmpeg: !!FFMPEG }));
 
@@ -600,9 +605,74 @@ route('POST', '/api/quit', ({ res }) => {
   setTimeout(shutdown, 100);
 });
 
+// ---- Lifetime: Marquee runs as long as its window -------------------------------------
+// When the server opened the window itself (the app, or `npm start`), it quits
+// once no page has been open for a few seconds: the window was closed, or the
+// browser quit or was killed. A reload reconnects well within that.
+// --quit-when-closed does the same without opening a window (tests).
+const FOLLOW_WINDOW = !process.argv.includes('--no-open') || process.argv.includes('--quit-when-closed');
+const CLOSED_GRACE_MS = 4000;
+const FIRST_PAGE_MS = 90e3; // the window may take a while to open the first time
+const pages = new Set();
+let windowProcess = null;
+let idleTimer = null;
+
+function quitWhenIdle(ms) {
+  clearTimeout(idleTimer);
+  if (FOLLOW_WINDOW && !pages.size) idleTimer = setTimeout(() => !pages.size && shutdown(), ms);
+}
+
+// Every open page keeps this event stream open.
+route('GET', '/api/session', ({ req, res }) => {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
+  res.write(': marquee\n\n');
+  pages.add(res);
+  clearTimeout(idleTimer);
+  const keepAlive = setInterval(() => res.write(': ping\n\n'), 30e3);
+  req.on('close', () => {
+    clearInterval(keepAlive);
+    pages.delete(res);
+    quitWhenIdle(CLOSED_GRACE_MS);
+  });
+});
+
+// Opens the app window as a child of this server. If that browser instance
+// is still running, the new process hands the window to it and exits.
+function showWindow() {
+  const running = windowProcess && windowProcess.exitCode == null && windowProcess.signalCode == null;
+  const child = openWindow(`http://localhost:${PORT}`, { own: true });
+  if (!running) windowProcess = child;
+  quitWhenIdle(FIRST_PAGE_MS);
+}
+
+// Opening the app while it runs (scripts/make-mac-app.sh).
+route('POST', '/api/window', ({ res }) => {
+  showWindow();
+  json(res, { ok: true });
+});
+
 // ---- Start ----------------------------------------------------------------------
 
+// Ends everything this process started: the window it opened, ffmpeg
+// conversions and the detection/preview workers' ffmpeg runs.
+function endChildren() {
+  if (process.platform === 'win32') return;
+  let pids = [];
+  try {
+    pids = execFileSync('pgrep', ['-P', String(process.pid)], { encoding: 'utf8' }).split('\n').filter(Boolean).map(Number);
+  } catch {} // none
+  for (const pid of pids) {
+    try {
+      // The browser gets to close cleanly (it saves the page's settings).
+      process.kill(pid, pid === windowProcess?.pid ? 'SIGTERM' : 'SIGKILL');
+    } catch {}
+  }
+}
+
+let shuttingDown = false;
 function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   for (const s of [config, progress, libraryStore, analyzer, onlineSubs, subsync]) {
     try {
       s.flush();
@@ -611,6 +681,7 @@ function shutdown() {
   flushProbes();
   process.exit(0);
 }
+process.on('exit', endChildren);
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
@@ -620,5 +691,6 @@ server.listen(PORT, HOST, () => {
   if (!FFMPEG) console.warn('ffmpeg not found: only browser-native formats will play and intro/credits detection is off. Install with: brew install ffmpeg');
   rescan();
   setInterval(rescan, 15 * 60 * 1000).unref();
-  if (!process.argv.includes('--no-open')) openWindow(url);
+  if (!process.argv.includes('--no-open')) showWindow();
+  else quitWhenIdle(FIRST_PAGE_MS);
 });
