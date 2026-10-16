@@ -1,0 +1,10 @@
+{
+  "name": "Marquee",
+  "short_name": "Marquee",
+  "description": "Your movies and TV shows, Netflix-style, with on-device intro and credits detection.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#141414",
+  "theme_color": "#141414",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
