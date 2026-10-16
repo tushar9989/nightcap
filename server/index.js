@@ -613,6 +613,7 @@ route('POST', '/api/quit', ({ res }) => {
 const FOLLOW_WINDOW = !process.argv.includes('--no-open') || process.argv.includes('--quit-when-closed');
 const CLOSED_GRACE_MS = 4000;
 const FIRST_PAGE_MS = 90e3; // the window may take a while to open the first time
+const BOOT_ID = Math.random().toString(36).slice(2);
 const pages = new Set();
 let windowProcess = null;
 let idleTimer = null;
@@ -622,10 +623,11 @@ function quitWhenIdle(ms) {
   if (FOLLOW_WINDOW && !pages.size) idleTimer = setTimeout(() => !pages.size && shutdown(), ms);
 }
 
-// Every open page keeps this event stream open.
+// Every open page keeps this event stream open. `boot` tells a page that lost
+// its engine whether it came back as a new one (then the page reloads).
 route('GET', '/api/session', ({ req, res }) => {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
-  res.write(': marquee\n\n');
+  res.write(`retry: 1000\nevent: hello\ndata: ${JSON.stringify({ boot: BOOT_ID })}\n\n`);
   pages.add(res);
   clearTimeout(idleTimer);
   const keepAlive = setInterval(() => res.write(': ping\n\n'), 30e3);
@@ -691,6 +693,9 @@ server.listen(PORT, HOST, () => {
   if (!FFMPEG) console.warn('ffmpeg not found: only browser-native formats will play and intro/credits detection is off. Install with: brew install ffmpeg');
   rescan();
   setInterval(rescan, 15 * 60 * 1000).unref();
-  if (!process.argv.includes('--no-open')) showWindow();
-  else quitWhenIdle(FIRST_PAGE_MS);
+  if (!process.argv.includes('--no-open')) {
+    // A window left open by an engine that was killed reconnects within about
+    // a second: adopt it instead of opening a second one.
+    setTimeout(() => !pages.size && showWindow(), 1200);
+  } else quitWhenIdle(FIRST_PAGE_MS);
 });

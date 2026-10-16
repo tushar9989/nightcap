@@ -461,3 +461,8 @@ svg { fill: currentColor; }
   .panel .col + .col { border-left: 0; border-top: 1px solid var(--line); }
   .skip-btn, .next-card { bottom: 110px; }
 }
+
+/* The engine has stopped while this window is open. */
+.stopped { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; text-align: center; background: rgba(10,10,10,.92); animation: rise .2s; }
+.stopped h1 { margin: 0 0 8px; font-size: 28px; }
+.stopped p { margin: 0; color: var(--text-2); font-size: 16px; }

@@ -57,7 +57,10 @@ Marquee runs as long as its window: closing the window, or quitting or
 force-quitting its browser, stops the engine a few seconds later along with
 everything it was running (conversions, detection, previews). Opening the app
 again starts it fresh; if an engine from older code is still running, the app
-replaces it. `node server/index.js --no-open` runs the engine on its own, with
+replaces it. Several windows share one engine, which stops after the last
+one closes. If the engine stops under an open window (say it was force-quit),
+the window says so and pauses; opening Marquee again reconnects it in place.
+`node server/index.js --no-open` runs the engine on its own, with
 no window, until you stop it (for development).
 macOS will ask once for permission when a folder lives in Downloads, Desktop or
 Documents.

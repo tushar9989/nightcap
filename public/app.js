@@ -431,7 +431,7 @@ function renderSettings() {
         : 'ffmpeg not found. Only MP4/WebM files play and detection is off. Install it with: brew install ffmpeg'),
       h('button', { class: 'btn btn-ghost btn-small', onclick: async () => {
         await api.post('/api/quit').catch(() => {});
-        view.replaceChildren(h('div', { class: 'welcome' }, h('div', {}, h('h1', {}, 'Marquee has stopped'), h('p', {}, 'Open the app again to restart it.'))));
+        showStopped();
       } }, 'Stop Marquee'))));
 
   const drawStatus = () => {
@@ -613,9 +613,46 @@ async function pollStatus() {
   setTimeout(pollStatus, page.base === 'settings' ? 2000 : 6000);
 }
 
-// While this page is open the server keeps running; it quits a few seconds
-// after the last page closes (see "Lifetime" in server/index.js).
-new EventSource('/api/session');
+// ---- Connection to the engine ------------------------------------------------------------
+// While this page is open the engine keeps running; it quits a few seconds
+// after the last page closes (see "Lifetime" in server/index.js). If the
+// engine goes away under this page (stopped elsewhere, or killed), say so and
+// pause; when it is back (Marquee opened again), reload into the current code.
+let bootId = null;
+let downTimer = null;
+let stoppedEl = null;
+
+function showStopped() {
+  if (stoppedEl) return;
+  for (const v of document.querySelectorAll('video')) v.pause();
+  stoppedEl = h('div', { class: 'stopped' }, h('div', {},
+    h('h1', {}, 'Marquee has stopped'),
+    h('p', {}, 'Open Marquee again to keep watching. This window reconnects by itself.')));
+  document.body.append(stoppedEl);
+}
+
+function connect() {
+  const session = new EventSource('/api/session');
+  session.addEventListener('hello', (e) => {
+    const { boot } = JSON.parse(e.data);
+    clearTimeout(downTimer);
+    downTimer = null;
+    if (bootId && boot !== bootId) {
+      // A new engine: reload, keeping the place in the video being watched.
+      if (player.isOpen && player.fid) history.replaceState(null, '', watchUrl(player.fid, player.time));
+      return location.reload();
+    }
+    bootId = boot;
+    stoppedEl?.remove();
+    stoppedEl = null;
+  });
+  session.onerror = () => {
+    downTimer ??= setTimeout(showStopped, 2500);
+    // Refused outright (an engine without sessions): the browser won't retry, so do.
+    if (session.readyState === EventSource.CLOSED) setTimeout(connect, 1000);
+  };
+}
+connect();
 
 route();
 pollStatus();
