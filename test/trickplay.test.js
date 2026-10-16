@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'marquee-tp-'));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nightcap-tp-'));
 process.env.DATA_DIR = path.join(tmp, 'data');
 const { FFMPEG } = await import('../server/util.js');
 const { Trickplay, jpegSize } = await import('../server/trickplay.js');

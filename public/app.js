@@ -143,7 +143,7 @@ function renderHome() {
   if (!lib.titles.length) {
     view.replaceChildren(h('div', { class: 'welcome' }, h('div', {},
       h('h1', {}, lib.scanning ? 'Looking through your folders…' : 'No videos found yet'),
-      h('p', {}, lib.scanning ? 'This only takes a moment.' : 'None of your folders contain videos Marquee recognises, or a drive is unplugged.'),
+      h('p', {}, lib.scanning ? 'This only takes a moment.' : 'None of your folders contain videos Nightcap recognises, or a drive is unplugged.'),
       h('a', { class: 'btn btn-ghost', href: '#/settings' }, 'Manage folders'))));
     return;
   }
@@ -323,11 +323,11 @@ function subtitlesSection() {
       const save = h('button', { class: 'btn btn-accent btn-small', onclick: () => busy(save, () => api.post('/api/opensubtitles/key', { apiKey: key.value })) }, 'Save key');
       key.addEventListener('keydown', (e) => e.key === 'Enter' && save.click());
       box.replaceChildren(head,
-        h('p', {}, 'To search online, Marquee needs your own API key. It is free:'),
+        h('p', {}, 'To search online, Nightcap needs your own API key. It is free:'),
         h('ol', {},
           h('li', {}, 'Create an account on ', OS_LINK('opensubtitles.com', 'https://www.opensubtitles.com/en/users/sign_up'), '.'),
-          h('li', {}, 'Open ', OS_LINK('API consumers', 'https://www.opensubtitles.com/en/consumers'), ', add a new consumer (call it Marquee) and copy its API key.'),
-          h('li', {}, 'Paste the key here. It stays on this Mac, in Marquee’s data folder.')),
+          h('li', {}, 'Open ', OS_LINK('API consumers', 'https://www.opensubtitles.com/en/consumers'), ', add a new consumer (call it Nightcap) and copy its API key.'),
+          h('li', {}, 'Paste the key here. It stays on this Mac, in Nightcap’s data folder.')),
         h('div', { class: 'os-row-form' }, key, save), note);
       return;
     }
@@ -350,14 +350,14 @@ function subtitlesSection() {
         h('div', { class: 'os-row-form' }, user, pass, go));
     }
     box.replaceChildren(head, keyLine, account, note,
-      h('div', { class: 'muted os-foot' }, 'Subtitles provided by ', OS_LINK('OpenSubtitles.com', 'https://www.opensubtitles.com'), '. Downloaded subtitles are kept in Marquee’s data folder; your media folders are not touched.'));
+      h('div', { class: 'muted os-foot' }, 'Subtitles provided by ', OS_LINK('OpenSubtitles.com', 'https://www.opensubtitles.com'), '. Downloaded subtitles are kept in Nightcap’s data folder; your media folders are not touched.'));
   };
   box.replaceChildren(h('div', { class: 'muted' }, 'Loading…'));
   api.get('/api/opensubtitles?refresh=1').then((st) => draw(st), (e) => box.replaceChildren(h('div', { class: 'muted' }, e.message)));
 
   return h('section', { class: 'section' },
     h('h2', {}, 'Subtitles'),
-    h('p', {}, 'Subtitle files next to a video and subtitle tracks inside it are found automatically. Marquee can also search OpenSubtitles.com, preferring subtitles timed for your exact file (Subtitles button → Search online…). Adverts that uploaders put into subtitles are hidden.'),
+    h('p', {}, 'Subtitle files next to a video and subtitle tracks inside it are found automatically. Nightcap can also search OpenSubtitles.com, preferring subtitles timed for your exact file (Subtitles button → Search online…). Adverts that uploaders put into subtitles are hidden.'),
     h('div', { class: 'setting' }, h('div', {}, h('div', {}, 'Subtitle language'), h('div', { class: 'desc' }, 'Searched first, and used for automatic downloads.')), h('div', { class: 'select' }, lang)),
     toggle('Download missing subtitles automatically', 'When you watch with subtitles on and an episode has none in your language, fetch the best match from OpenSubtitles (one download from the daily allowance per episode).', 'autoFetchSubtitles'),
     box);
@@ -429,7 +429,7 @@ function renderSettings() {
       h('button', { class: 'btn btn-ghost btn-small', onclick: async () => {
         await api.post('/api/quit').catch(() => {});
         showStopped();
-      } }, 'Stop Marquee'))));
+      } }, 'Quit Nightcap'))));
 
   const drawStatus = () => {
     const a = state.status?.analysis;
@@ -615,7 +615,7 @@ async function pollStatus() {
 // While this page is open the engine keeps running; it quits a few seconds
 // after the last page closes (see "Lifetime" in server/index.js). If the
 // engine goes away under this page (stopped elsewhere, or killed), say so and
-// pause; when it is back (Marquee opened again), reload into the current code.
+// pause; when it is back (Nightcap opened again), reload into the current code.
 let bootId = null;
 let downTimer = null;
 let stoppedEl = null;
@@ -624,8 +624,8 @@ function showStopped() {
   if (stoppedEl) return;
   for (const v of document.querySelectorAll('video')) v.pause();
   stoppedEl = h('div', { class: 'stopped' }, h('div', {},
-    h('h1', {}, 'Marquee has stopped'),
-    h('p', {}, 'Open Marquee again to keep watching. This window reconnects by itself.')));
+    h('h1', {}, 'Nightcap has stopped'),
+    h('p', {}, 'Open Nightcap again to keep watching. This window reconnects by itself.')));
   document.body.append(stoppedEl);
 }
 

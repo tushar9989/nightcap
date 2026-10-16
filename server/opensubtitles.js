@@ -14,7 +14,7 @@ import { decodeText } from './subtext.js';
 
 export const DEFAULT_BASE = 'https://api.opensubtitles.com/api/v1';
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
-const USER_AGENT = `Marquee v${VERSION}`;
+const USER_AGENT = `Nightcap v${VERSION}`;
 const SPACING_MS = 250; // the API allows 5 requests per second per IP
 const SHOW_CACHE_MS = 30 * 86400e3;
 const MAX_SUBTITLE_BYTES = 8 << 20;

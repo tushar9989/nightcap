@@ -1033,7 +1033,7 @@ export class Player {
       this.panelEl.replaceChildren(
         h('header', {}, back, h('h4', {}, 'Find subtitles online')),
         h('div', { class: 'os-note col-note' },
-          h('p', {}, 'Marquee can find subtitles for this video on OpenSubtitles.com. It needs your own free API key first.'),
+          h('p', {}, 'Nightcap can find subtitles for this video on OpenSubtitles.com. It needs your own free API key first.'),
           h('button', { class: 'btn btn-accent btn-small', onclick: () => (location.hash = '#/settings') }, 'Set up in Settings')),
         credit);
       return;

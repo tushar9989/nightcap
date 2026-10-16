@@ -1,4 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" fill="#141414"/>
-  <path d="M136 384V128h56l64 104 64-104h56v256h-60V232l-60 96-60-96v152z" fill="#e5383b"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d2840"/>
+      <stop offset="1" stop-color="#14131a"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f6c063"/>
+      <stop offset="1" stop-color="#e08f2a"/>
+    </linearGradient>
+    <mask id="bite">
+      <rect width="512" height="512" fill="#fff"/>
+      <circle cx="322" cy="196" r="128" fill="#000"/>
+    </mask>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="104" fill="url(#bg)"/>
+  <circle cx="246" cy="268" r="158" fill="url(#glow)" mask="url(#bite)"/>
+  <path d="M300 168v96l80-48z" fill="url(#glow)" stroke="url(#glow)" stroke-width="14" stroke-linejoin="round"/>
 </svg>

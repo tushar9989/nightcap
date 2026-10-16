@@ -257,7 +257,7 @@ const fileOr404 = (res, id) => {
 // server left over from older code gets replaced (scripts/make-mac-app.sh).
 const CODE_STAMP = Math.max(...[...fs.readdirSync(path.join(ROOT, 'server')).filter((n) => n.endsWith('.js')).map((n) => path.join(ROOT, 'server', n)), path.join(ROOT, 'package.json')]
   .map((f) => Math.floor(fs.statSync(f).mtimeMs / 1000)));
-route('GET', '/api/ping', ({ res }) => json(res, { ok: true, app: 'marquee', code: CODE_STAMP }));
+route('GET', '/api/ping', ({ res }) => json(res, { ok: true, app: 'nightcap', code: CODE_STAMP }));
 route('GET', '/api/library', ({ res }) => json(res, libraryPayload()));
 route('GET', '/api/status', ({ res }) => json(res, { scanning: !!scanning, analysis: analyzer.status(), previews: trickplay.status(), folderStatus: library.folderStatus, ffmpeg: !!FFMPEG }));
 
@@ -605,7 +605,7 @@ route('POST', '/api/quit', ({ res }) => {
   setTimeout(shutdown, 100);
 });
 
-// ---- Lifetime: Marquee runs as long as its window -------------------------------------
+// ---- Lifetime: Nightcap runs as long as its window -------------------------------------
 // When the server opened the window itself (the app, or `npm start`), it quits
 // once no page has been open for a few seconds: the window was closed, or the
 // browser quit or was killed. A reload reconnects well within that.
@@ -689,7 +689,7 @@ process.on('SIGTERM', shutdown);
 
 server.listen(PORT, HOST, () => {
   const url = `http://localhost:${PORT}`;
-  console.log(`Marquee running at ${url}`);
+  console.log(`Nightcap running at ${url}`);
   if (!FFMPEG) console.warn('ffmpeg not found: only browser-native formats will play and intro/credits detection is off. Install with: brew install ffmpeg');
   rescan();
   setInterval(rescan, 15 * 60 * 1000).unref();

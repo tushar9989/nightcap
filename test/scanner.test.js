@@ -6,7 +6,7 @@ import path from 'node:path';
 import { scanLibrary, parseEpisode, parseTitle, seasonNumber } from '../server/scanner.js';
 
 function tree(files) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'marquee-scan-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nightcap-scan-'));
   for (const f of files) {
     const p = path.join(root, f);
     fs.mkdirSync(path.dirname(p), { recursive: true });

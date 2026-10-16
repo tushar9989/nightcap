@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 // Isolated data folder and a fake OpenSubtitles server for everything below.
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'marquee-subs-'));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nightcap-subs-'));
 process.env.DATA_DIR = path.join(tmp, 'data');
 
 const { stripAds, retime, srtToVtt, sniffFormat, cueTimes } = await import('../server/subtext.js');
@@ -121,7 +121,7 @@ before(async () => {
     };
     if (url.pathname === '/file/9001.srt') return res.end(SRT);
     if (req.headers['api-key'] !== KEY) return send(403, { message: 'You cannot consume this service' });
-    if (!/^Marquee v\d/.test(req.headers['user-agent'])) return send(403, { message: 'User-Agent header is wrong' });
+    if (!/^Nightcap v\d/.test(req.headers['user-agent'])) return send(403, { message: 'User-Agent header is wrong' });
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', () => {

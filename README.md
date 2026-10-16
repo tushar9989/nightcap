@@ -1,4 +1,4 @@
-# Marquee
+# Nightcap
 
 A player for the films and shows on your own Mac, with the conveniences of
 streaming apps. Point it at folders; it works out shows, seasons and movies,
@@ -53,16 +53,16 @@ shows and movies; each title has its own page with seasons and episodes.
 
 ```sh
 npm start                    # starts the engine and opens the app window
-scripts/make-mac-app.sh      # builds ~/Applications/Marquee.app (Dock/Spotlight launcher)
+scripts/make-mac-app.sh      # builds ~/Applications/Nightcap.app (Dock/Spotlight launcher)
 ```
 
-Marquee runs as long as its window: closing the window, or quitting or
+Nightcap runs as long as its window: closing the window, or quitting or
 force-quitting its browser, stops the engine a few seconds later along with
 everything it was running (conversions, detection, previews). Opening the app
 again starts it fresh; if an engine from older code is still running, the app
 replaces it. Several windows share one engine, which stops after the last
 one closes. If the engine stops under an open window (say it was force-quit),
-the window says so and pauses; opening Marquee again reconnects it in place.
+the window says so and pauses; opening Nightcap again reconnects it in place.
 `node server/index.js --no-open` runs the engine on its own, with
 no window, until you stop it (for development).
 macOS will ask once for permission when a folder lives in Downloads, Desktop or

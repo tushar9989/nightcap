@@ -1,4 +1,4 @@
-// Opens Marquee in its own app-style window (no tabs or address bar).
+// Opens Nightcap in its own app-style window (no tabs or address bar).
 // Chrome is preferred: it plays the on-the-fly converted streams that
 // Safari cannot. Usable on its own: node server/window.js [url]
 //
