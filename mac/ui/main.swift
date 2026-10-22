@@ -1,0 +1,265 @@
+import AppKit
+
+// Nightcap: one Mac app, one process. Opening it shows a window and starts the
+// engine (scans, intro and credits detection, previews); quitting it, or
+// closing its last window, saves everything and ends every ffmpeg run it started.
+
+// ---- The data of the earlier Nightcap ------------------------------------------------------
+
+/// The earlier Nightcap (a Node engine) kept its data in the repository's data/
+/// folder, which Info.plist's NightcapLegacyData names. The first launch copies
+/// it (APFS clones: instant, and no extra space), so progress, detection
+/// results, previews and downloaded subtitles carry over.
+@MainActor
+enum LegacyData {
+  static let items = [
+    "analysis.json", "library.json", "probe.json", "progress.json", "opensubtitles.json", "subs-downloaded.json",
+    "subsync.json", "fingerprints", "subs", "subs-downloaded", "thumbs", "trickplay",
+    // Last: once it is there, the copy is complete.
+    "config.json",
+  ]
+  static let stagingPrefix = ".copying-"
+
+  static func copyIfNeeded() {
+    if let d = ProcessInfo.processInfo.environment["DATA_DIR"], !d.isEmpty { return }
+    let fm = FileManager.default
+    if fm.fileExists(atPath: Paths.data("config.json")) { return }
+    guard let from = Bundle.main.object(forInfoDictionaryKey: "NightcapLegacyData") as? String, !from.isEmpty,
+      fm.fileExists(atPath: join(from, "config.json"))
+    else { return }
+    ensureDir(Paths.data)
+    // Left by a copy that was cut short.
+    for name in (try? fm.contentsOfDirectory(atPath: Paths.data)) ?? [] where name.hasPrefix(stagingPrefix) {
+      try? fm.removeItem(atPath: Paths.data(name))
+    }
+    let staging = Paths.data("\(stagingPrefix)\(getpid())")
+    ensureDir(staging)
+    defer { try? fm.removeItem(atPath: staging) }
+    // Each item is copied whole into the staging folder, then moved into place,
+    // so what is in place is always complete.
+    var copied = 0
+    for name in items {
+      let src = join(from, name)
+      let dst = Paths.data(name)
+      guard fm.fileExists(atPath: src), !fm.fileExists(atPath: dst) else { continue }
+      let staged = join(staging, name)
+      guard clone(src, staged) else {
+        logLine("[app] could not copy \(src); the earlier data was not taken over")
+        return
+      }
+      do {
+        try fm.moveItem(atPath: staged, toPath: dst)
+        copied += 1
+      } catch {
+        logLine("[app] could not move \(name) into place: \(error.localizedDescription)")
+        return
+      }
+    }
+    logLine("[app] took over the earlier Nightcap's data from \(from) (\(copied) items)")
+  }
+
+  /// `cp -c -R`: a clone where the disk allows it, else a copy.
+  private static func clone(_ src: String, _ dst: String) -> Bool {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/cp")
+    p.arguments = ["-c", "-R", src, dst]
+    do {
+      try p.run()
+    } catch {
+      return false
+    }
+    p.waitUntilExit()
+    return p.terminationStatus == 0
+  }
+}
+
+// ---- The app --------------------------------------------------------------------------------
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+  let app: AppModel
+  private var controllers: [WindowController] = []
+  private var monitors: [Any] = []
+  private var refreshTimer: Timer?
+
+  init(app: AppModel) {
+    self.app = app
+    super.init()
+  }
+
+  func applicationDidFinishLaunching(_ note: Notification) {
+    buildMenu()
+    ArtCache.shared.engine = app.engine
+    watchEvents()
+    openWindow()
+    app.engine.start()
+    // Durations found by probing don't announce themselves: look again now and then.
+    let timer = Timer(timeInterval: 20, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated { self?.app.refresh() }
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    refreshTimer = timer
+    NSApp.activate()
+  }
+
+  func applicationWillTerminate(_ note: Notification) {
+    refreshTimer?.invalidate()
+    for c in controllers { c.model.closePlayer() }
+    app.engine.shutdown()
+  }
+
+  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+  func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
+  /// Clicking the Dock icon with no window open opens one.
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+    if controllers.isEmpty {
+      openWindow()
+      return false
+    }
+    return true
+  }
+
+  // ---- Windows ---------------------------------------------------------------------------------
+
+  @discardableResult
+  private func openWindow() -> WindowController {
+    let c = WindowController(app: app, after: controller(NSApp.keyWindow)?.window ?? controllers.last?.window)
+    c.onClose = { [weak self] closed in self?.controllers.removeAll { $0 === closed } }
+    controllers.append(c)
+    c.show()
+    return c
+  }
+
+  private func controller(_ window: NSWindow?) -> WindowController? {
+    guard let window else { return nil }
+    return controllers.first { $0.window === window }
+  }
+
+  @objc func newWindow(_ sender: Any?) {
+    openWindow()
+  }
+
+  @objc func showSettings(_ sender: Any?) {
+    let c = controller(NSApp.keyWindow) ?? controllers.first ?? openWindow()
+    c.window.makeKeyAndOrderFront(nil)
+    c.model.go(.settings)
+  }
+
+  @objc func find(_ sender: Any?) {
+    controller(NSApp.keyWindow)?.model.focusSearch()
+  }
+
+  func validateMenuItem(_ item: NSMenuItem) -> Bool {
+    if item.action == #selector(find(_:)) {
+      guard let c = controller(NSApp.keyWindow) else { return false }
+      return c.model.player == nil
+    }
+    return true
+  }
+
+  // ---- Keys and the mouse ---------------------------------------------------------------------------
+
+  private func watchEvents() {
+    // The player's keys, and / for search.
+    if let m = NSEvent.addLocalMonitorForEvents(
+      matching: .keyDown,
+      handler: { [weak self] e in
+        guard let c = self?.controller(e.window) else { return e }
+        return c.model.handleKey(e) ? nil : e
+      })
+    {
+      monitors.append(m)
+    }
+    // Moving the mouse over the player shows its controls.
+    if let m = NSEvent.addLocalMonitorForEvents(
+      matching: [.mouseMoved, .leftMouseDragged],
+      handler: { [weak self] e in
+        if e.deltaX != 0 || e.deltaY != 0 { self?.controller(e.window)?.model.player?.showControls() }
+        return e
+      })
+    {
+      monitors.append(m)
+    }
+    // A click in one of the player's panels keeps it open.
+    if let m = NSEvent.addLocalMonitorForEvents(
+      matching: .leftMouseDown,
+      handler: { [weak self] e in
+        if let c = self?.controller(e.window), let p = c.model.player, let host = c.window.contentView {
+          let pt = host.convert(e.locationInWindow, from: nil)
+          p.mouseDown(at: CGPoint(x: pt.x, y: host.isFlipped ? pt.y : host.bounds.height - pt.y))
+        }
+        return e
+      })
+    {
+      monitors.append(m)
+    }
+  }
+
+  // ---- Menus --------------------------------------------------------------------------------------
+
+  private func buildMenu() {
+    func item(_ title: String, _ action: Selector?, _ key: String = "", _ mods: NSEvent.ModifierFlags = .command) -> NSMenuItem {
+      let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
+      i.keyEquivalentModifierMask = mods
+      return i
+    }
+    let app = NSMenu()
+    app.addItem(item("About Nightcap", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+    app.addItem(.separator())
+    app.addItem(item("Settings…", #selector(showSettings(_:)), ","))
+    app.addItem(.separator())
+    app.addItem(item("Hide Nightcap", #selector(NSApplication.hide(_:)), "h"))
+    app.addItem(item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]))
+    app.addItem(item("Show All", #selector(NSApplication.unhideAllApplications(_:))))
+    app.addItem(.separator())
+    app.addItem(item("Quit Nightcap", #selector(NSApplication.terminate(_:)), "q"))
+    let file = NSMenu(title: "File")
+    file.addItem(item("New Window", #selector(newWindow(_:)), "n"))
+    file.addItem(item("Close Window", #selector(NSWindow.performClose(_:)), "w"))
+    let edit = NSMenu(title: "Edit")
+    edit.addItem(item("Undo", Selector(("undo:")), "z"))
+    edit.addItem(item("Redo", Selector(("redo:")), "z", [.command, .shift]))
+    edit.addItem(.separator())
+    edit.addItem(item("Cut", #selector(NSText.cut(_:)), "x"))
+    edit.addItem(item("Copy", #selector(NSText.copy(_:)), "c"))
+    edit.addItem(item("Paste", #selector(NSText.paste(_:)), "v"))
+    edit.addItem(item("Select All", #selector(NSText.selectAll(_:)), "a"))
+    edit.addItem(.separator())
+    edit.addItem(item("Find", #selector(find(_:)), "f"))
+    let view = NSMenu(title: "View")
+    view.addItem(item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]))
+    let window = NSMenu(title: "Window")
+    window.addItem(item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"))
+    window.addItem(item("Zoom", #selector(NSWindow.performZoom(_:))))
+    window.addItem(.separator())
+    window.addItem(item("Bring All to Front", #selector(NSApplication.arrangeInFront(_:))))
+    let bar = NSMenu()
+    for (title, menu) in [("Nightcap", app), ("File", file), ("Edit", edit), ("View", view), ("Window", window)] {
+      let top = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+      top.submenu = menu
+      bar.addItem(top)
+    }
+    NSApp.mainMenu = bar
+    NSApp.windowsMenu = window
+  }
+}
+
+// ---- Start ----------------------------------------------------------------------------------------
+
+MainActor.assumeIsolated {
+  LegacyData.copyIfNeeded()
+  let app = NSApplication.shared
+  let delegate = AppDelegate(app: AppModel())
+  app.delegate = delegate
+  app.setActivationPolicy(.regular)
+
+  // `kill` (or logging out) quits like ⌘Q: progress is saved and ffmpeg runs end.
+  signal(SIGTERM, SIG_IGN)
+  let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+  sigterm.setEventHandler { NSApp.terminate(nil) }
+  sigterm.resume()
+
+  withExtendedLifetime((delegate, sigterm)) { app.run() }
+}
