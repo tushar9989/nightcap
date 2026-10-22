@@ -66,8 +66,14 @@ const CAN = {
   av1: can('video/mp4; codecs="av01.0.05M.08"'),
   vp9: can('video/mp4; codecs="vp09.00.10.08"') || can('video/webm; codecs="vp9"'),
 };
+// Chrome (and Edge, Brave) reads MKV and can send any video's sound through Web
+// Audio, for volume above 100%. WebKit (the Mac app) can't do either: Media
+// Source sound bypasses Web Audio, and a video once routed into Web Audio stays
+// routed, so there louder sound comes from ffmpeg instead (streamGain).
+const CHROMIUM = /Chrome\//.test(navigator.userAgent);
+const STREAM_GAIN = 2;
 const AUDIO_OK = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac']);
-const DIRECT_CONTAINERS = new Set(['mp4', 'm4v', 'mov', 'webm', 'mkv']);
+const DIRECT_CONTAINERS = new Set(['mp4', 'm4v', 'mov', 'webm', ...(CHROMIUM ? ['mkv'] : [])]);
 
 function videoPlayable(v) {
   if (!v) return true;
@@ -149,6 +155,7 @@ export class Player {
     this.fid = null;
     this.volume = Math.min(MAX_VOLUME, store.get('volume', 1));
     this.muted = store.get('muted', false);
+    this.streamGain = 1; // how much louder ffmpeg makes the current stream
     this.speed = Math.min(MAX_SPEED, Math.max(MIN_SPEED, Number(store.get('speed', 1)) || 1));
   }
 
@@ -272,11 +279,17 @@ export class Player {
   // ---- media -----------------------------------------------------------------------
 
   streamUrl(at) {
-    return `/api/stream/${this.fid}?mode=${this.mode}&audio=${this.audio}&start=${at.toFixed(2)}`;
+    return `/api/stream/${this.fid}?mode=${this.mode}&audio=${this.audio}&start=${at.toFixed(2)}${this.streamGain > 1 ? `&gain=${this.streamGain}` : ''}`;
   }
 
   startMedia(at) {
     const v = this.video;
+    if (!CHROMIUM) {
+      // Above 100%, the sound comes louder from ffmpeg (a direct file is repackaged for it).
+      const louder = !this.muted && this.volume > 1 && !!this.info?.ffmpeg;
+      if (louder && this.mode === 'direct') this.mode = this.info.probe?.video?.codec === 'vp8' ? 'transcode' : 'remux';
+      this.streamGain = louder ? STREAM_GAIN : 1;
+    }
     this.stopping = false;
     this.pendingSeek = null;
     clearTimeout(this.seekTimer);
@@ -429,13 +442,23 @@ export class Player {
 
   applyVolume() {
     const level = this.muted ? 0 : this.volume;
-    if (level > 1) this.ensureBoost();
-    if (this.ctx) {
-      this.video.volume = 1;
-      this.gain.gain.setTargetAtTime(level, this.ctx.currentTime, 0.015);
-      if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+    if (!CHROMIUM) {
+      // A louder stream is turned down to the level asked for. Going above what
+      // the current stream gives restarts it louder, once the volume settles.
+      if (level > this.streamGain && this.fid && this.info?.ffmpeg) {
+        clearTimeout(this.louderTimer);
+        this.louderTimer = setTimeout(() => this.fid && !this.stopping && !this.muted && this.volume > this.streamGain && this.startMedia(this.time), 400);
+      }
+      this.video.volume = Math.min(1, level / this.streamGain);
     } else {
-      this.video.volume = Math.min(1, level);
+      if (level > 1) this.ensureBoost();
+      if (this.ctx) {
+        this.video.volume = 1;
+        this.gain.gain.setTargetAtTime(level, this.ctx.currentTime, 0.015);
+        if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+      } else {
+        this.video.volume = Math.min(1, level);
+      }
     }
     this.video.muted = false;
     if (this.volEl) {

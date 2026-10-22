@@ -410,6 +410,7 @@ route('GET', '/api/stream/:id', ({ req, res, params, query }) => {
     mode: query.mode === 'transcode' ? 'transcode' : 'remux',
     audio: Math.max(0, Number(query.audio) | 0),
     abs: query.abs === '1',
+    gain: Math.min(2, Math.max(1, Number(query.gain) || 1)),
   });
 });
 

@@ -115,7 +115,8 @@ function videoKbps(v) {
 // Seeking is done by the player requesting a new stream at `start`. With
 // `abs` the stream keeps the video's own timestamps (the player's Media Source
 // buffer lines streams up by them); otherwise it starts at 0.
-export async function streamTranscoded(req, res, file, { start = 0, mode = 'remux', audio = 0, abs = false }) {
+// `gain` > 1 makes the sound louder, for players that can't boost it themselves.
+export async function streamTranscoded(req, res, file, { start = 0, mode = 'remux', audio = 0, abs = false, gain = 1 }) {
   if (!FFMPEG) {
     res.writeHead(501);
     return res.end('ffmpeg is not installed');
@@ -136,7 +137,10 @@ export async function streamTranscoded(req, res, file, { start = 0, mode = 'remu
     args.push('-c:v', 'copy');
     if (info?.video?.codec === 'hevc') args.push('-tag:v', 'hvc1');
   }
-  if (a && a.codec === 'aac' && (a.channels || 2) <= 6) args.push('-c:a', 'copy');
+  // A limiter after the gain squashes boosted peaks instead of clipping them
+  // (as the player's own Web Audio boost does).
+  if (gain > 1) args.push('-af', `volume=${gain},alimiter=limit=0.95:level=disabled`, '-c:a', 'aac', '-b:a', '192k', '-ac', '2');
+  else if (a && a.codec === 'aac' && (a.channels || 2) <= 6) args.push('-c:a', 'copy');
   else args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2');
   // Half-second fragments: the first frames reach the player sooner than
   // whole-GOP fragments would (about 0.2 s instead of 0.4 s after a seek).

@@ -46,27 +46,28 @@ shows and movies; each title has its own page with seasons and episodes.
 - macOS (tested on macOS 26) – Linux/Windows should work but are untested
 - [Node.js](https://nodejs.org) 22 or newer
 - [ffmpeg](https://ffmpeg.org): `brew install ffmpeg` (needed for most formats and for detection)
-- Google Chrome (or Edge/Brave) for the app window – Safari cannot play the
-  on-the-fly converted streams
+- To build the Mac app: the Xcode Command Line Tools (`xcode-select --install`).
+  The app draws its windows with the WebKit that comes with macOS; no browser
+  is needed.
 
 ## Run it
 
 ```sh
-npm start                    # starts the engine and opens the app window
-scripts/make-mac-app.sh      # builds ~/Applications/Nightcap.app (Dock/Spotlight launcher)
+scripts/make-mac-app.sh      # builds ~/Applications/Nightcap.app, then open it from Finder/Spotlight/Dock
+npm start                    # development: starts the engine and opens a Chrome (or Edge/Brave) window
 ```
 
-Nightcap runs as long as its window: closing the window, or quitting or
-force-quitting its browser, stops the engine a few seconds later along with
-everything it was running (conversions, detection, previews). Opening the app
-again starts it fresh; if an engine from older code is still running, the app
-replaces it. Several windows share one engine, which stops after the last
-one closes. If the engine stops under an open window (say it was force-quit),
-the window says so and pauses; opening Nightcap again reconnects it in place.
-`node server/index.js --no-open` runs the engine on its own, with
-no window, until you stop it (for development).
+The app starts the engine when it opens and stops it when it quits (⌘Q, or
+closing its last window), along with everything the engine was running
+(conversions, detection, previews). If the app is force-quit, the engine
+notices its windows are gone and stops a few seconds later. If the engine
+crashes, the app starts it again and the windows pick up where they were.
+Opening the app always runs the engine code on disk: an engine left over from
+before is replaced. ⌘N opens another window on the same engine.
+`node server/index.js --no-open` runs the engine on its own, with no window,
+until you stop it (for development).
 macOS will ask once for permission when a folder lives in Downloads, Desktop or
-Documents.
+Documents (again after the app is rebuilt).
 
 ## Intro & credits detection
 
@@ -172,8 +173,11 @@ server/
   subsync.js          subtitle-to-dialogue sync (speech activity + correlation)
   subtext.js          subtitle text: SRT -> WebVTT, advert removal, retiming
   trickplay.js        preview thumbnail sheets (seek bar, episode previews)
-  window.js           opens the app window
+  window.js           opens a browser app window (npm start)
 public/               the app (no build step, no dependencies)
   stream.js           Media Source playback of converted streams (instant short seeks)
+mac/
+  Nightcap.swift      the Mac app: WebKit windows, starts and stops the engine
+  render-icon.swift   renders public/icon.svg for the app icon
 scripts/make-mac-app.sh
 ```
