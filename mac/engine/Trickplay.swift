@@ -16,6 +16,8 @@ final class Trickplay {
 
   let dir = ensureDir(Paths.data("trickplay"))
   private let getLibrary: () -> Library
+  /// Videos opened from outside the library: previewed when asked for, kept while open.
+  private let getLoose: () -> [String: LibraryFile]
   private let media: Media
   private let isEnabled: () -> Bool
   /// Called when previews are made or the queue changes.
@@ -26,12 +28,18 @@ final class Trickplay {
   private(set) var queue: [String] = []  // fileIds, next first
   private(set) var current: String?
 
-  init(getLibrary: @escaping () -> Library, media: Media, isEnabled: @escaping () -> Bool) {
+  init(
+    getLibrary: @escaping () -> Library, getLoose: @escaping () -> [String: LibraryFile] = { [:] }, media: Media,
+    isEnabled: @escaping () -> Bool
+  ) {
     self.getLibrary = getLibrary
+    self.getLoose = getLoose
     self.media = media
     self.isEnabled = isEnabled
     loadIndex()
   }
+
+  private func file(_ id: String) -> LibraryFile? { getLibrary().files[id] ?? getLoose()[id] }
 
   /// Seconds between thumbnails: finer for short videos.
   static func interval(for duration: Double) -> Double { duration <= 600 ? 2 : duration <= 3600 ? 5 : 10 }
@@ -112,9 +120,8 @@ final class Trickplay {
   /// Put these files at the front of the queue, in this order.
   func prioritize(_ fileIds: [String]) {
     guard isEnabled() else { return }
-    let files = getLibrary().files
     let ids = fileIds.filter { id in
-      guard let f = files[id] else { return false }
+      guard let f = file(id) else { return false }
       return manifest(f) == nil && current != id && !recentlyFailed(f)
     }
     queue = ids + queue.filter { !ids.contains($0) }
@@ -123,16 +130,16 @@ final class Trickplay {
 
   func kick() {
     guard current == nil, Tools.ffmpeg != nil, isEnabled() else { return }
-    let files = getLibrary().files
-    var next: String?
+    var next: LibraryFile?
     while !queue.isEmpty {
       let id = queue.removeFirst()
-      if let f = files[id], manifest(f) == nil {
-        next = id
+      if let f = file(id), manifest(f) == nil {
+        next = f
         break
       }
     }
-    guard let id = next, let f = files[id] else { return }
+    guard let f = next else { return }
+    let id = f.id
     current = id
     onChange?()
     Task {
@@ -218,9 +225,10 @@ final class Trickplay {
       current: current.flatMap { files[$0]?.name }, bytes: ready.values.reduce(0) { $0 + $1.bytes })
   }
 
-  /// Remove previews of videos that left the library or changed on disk.
+  /// Remove previews of videos that left the library (and aren't open from
+  /// outside it) or changed on disk.
   func cleanup() {
-    let keep = Set(getLibrary().files.values.map { "\($0.id)-\(sigHash($0))" })
+    let keep = Set((Array(getLibrary().files.values) + getLoose().values).map { "\($0.id)-\(sigHash($0))" })
     for (name, _) in Scanner.readdir(dir) ?? [] {
       if keep.contains(name) || (current.map { name.jsStartsWith("\($0)-") } ?? false) { continue }
       removeItem(join(dir, name))

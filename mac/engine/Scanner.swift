@@ -697,4 +697,36 @@ enum Scanner {
     out.stableSort { naturalCompare($0.name, $1.name) }
     return Library(titles: out, files: files, folderStatus: folderStatus, scannedAt: nowMs(), fileOrder: fileOrder)
   }
+
+  // ---- A video on its own ------------------------------------------------------------------
+
+  /// A video opened from outside the library (Finder's Open With, File › Open),
+  /// with the subtitles and thumbnail a scan would find for it in its folder.
+  /// Only that folder and its subtitle folders are read, not the rest of the tree.
+  static func looseFile(_ path: String) -> LibraryFile? {
+    var st = stat()
+    guard stat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { return nil }
+    let dir = dirname(path)
+    var seen: Set<JSKey> = [JSKey(realpath(dir) ?? dir)]
+    // At the deepest level a walk reads the folder's files and no subfolders.
+    let node = walk(dir, maxDepth, &seen)
+    defer { withExtendedLifetime(node) {} }
+    for (name, _) in readdir(dir) ?? [] where !name.jsStartsWith(".") && subDirs.test(name) {
+      let child = walk(join(dir, name), 1, &seen)
+      if child.total == 0 { node.subs += child.subs.map { join(name, $0) } }
+    }
+    let name = basename(path)
+    let v: Video
+    if let found = node.videos.first(where: { $0.name == name }) {
+      v = found
+    } else {
+      // Not taken for a video by its name ("…-sample.mkv", an extension the scan skips).
+      v = Video(name: name, path: path, size: Int64(st.st_size), mtime: mtimeMs(st), dir: node)
+      node.videos.append(v)
+    }
+    let stem = stemOf(name)
+    return LibraryFile(
+      id: hashId(path), titleId: "", season: -1, number: nil, name: stem, path: path, size: v.size, mtime: v.mtime,
+      thumb: pickImage(node, ["thumb"], stem), subs: subtitlesFor(v))
+  }
 }

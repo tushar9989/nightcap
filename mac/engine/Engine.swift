@@ -152,6 +152,8 @@ final class Engine {
   private(set) var trickplay: Trickplay!
   private(set) var library: Library
   private var titles: [String: Title] = [:]
+  /// Videos opened from outside the library (Finder, File › Open), until the app quits.
+  private var loose: [String: LibraryFile] = [:]
   /// Called when the library, detection or previews change.
   var onChange: (() -> Void)?
 
@@ -173,7 +175,7 @@ final class Engine {
       isEnabled: { [unowned self] in self.config.data.settings.analysis })
     onlineSubs = OnlineSubs(getTitle: { [unowned self] in self.titles[$0] }, media: media)
     trickplay = Trickplay(
-      getLibrary: { [unowned self] in self.library }, media: media,
+      getLibrary: { [unowned self] in self.library }, getLoose: { [unowned self] in self.loose }, media: media,
       isEnabled: { [unowned self] in self.config.data.settings.previews })
     analyzer.onChange = { [weak self] in self?.onChange?() }
     trickplay.onChange = { [weak self] in self?.onChange?() }
@@ -300,6 +302,12 @@ final class Engine {
       let m = analyzer.markers(f.id)
       if m.intro != nil || m.credits != nil { markers[f.id] = MarkerPair(intro: m.intro, credits: m.credits) }
     }
+    // Opened from outside the library: known to the player, not on any page.
+    for f in loose.values where files[f.id] == nil {
+      files[f.id] = FileSummary(
+        id: f.id, titleId: f.titleId, season: f.season, number: f.number, name: f.name,
+        duration: Engine.or(media.cachedProbe(f)?.duration, Engine.or(progress.data.files[f.id]?.duration, 0)))
+    }
     return LibrarySnapshot(
       titles: library.titles, files: files, fileOrder: ordered.map(\.id), markers: markers, progress: progress.data.files,
       hidden: progress.data.hidden, folders: config.data.folders, folderStatus: library.folderStatus, settings: config.data.settings,
@@ -313,11 +321,50 @@ final class Engine {
   }
 
   func file(_ id: String) throws -> LibraryFile {
-    guard let f = library.files[id] else { throw EngineError("unknown file", 404) }
+    guard let f = library.files[id] ?? loose[id] else { throw EngineError("unknown file", 404) }
     return f
   }
 
   func title(_ id: String) -> Title? { titles[id] }
+
+  // ---- Videos opened from outside the library ------------------------------------------
+
+  /// The id to play a file by (Finder's Open With, File › Open): the library's
+  /// own video when it is one (after a scan, if it sits in a library folder the
+  /// last scan didn't see it in), else the file on its own. Nil when it can't be read.
+  func openPath(_ rawPath: String) async -> String? {
+    let p = resolvePath(rawPath)
+    var st = stat()
+    guard stat(p, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { return nil }
+    if let id = libraryId(p, st) { return id }
+    if inLibraryFolder(p) {
+      await rescan()
+      if let id = libraryId(p, st) { return id }
+    }
+    guard let f = Scanner.looseFile(p) else { return nil }
+    loose[f.id] = f
+    return f.id
+  }
+
+  /// The library's video at this path, or the same file reached another way
+  /// (a link, another mount): same size, same file on disk.
+  private func libraryId(_ p: String, _ st: stat) -> String? {
+    let id = hashId(p)
+    if library.files[id]?.path == p { return id }
+    for f in library.orderedFiles where f.size == Int64(st.st_size) {
+      var other = stat()
+      if stat(f.path, &other) == 0 && other.st_dev == st.st_dev && other.st_ino == st.st_ino { return f.id }
+    }
+    return nil
+  }
+
+  private func inLibraryFolder(_ p: String) -> Bool {
+    let real = Scanner.realpath(p) ?? p
+    return config.data.folders.contains { folder in
+      guard let root = Scanner.realpath(folder.path) else { return false }
+      return real.hasPrefix(root.hasSuffix("/") ? root : "\(root)/")
+    }
+  }
 
   // ---- Folders ------------------------------------------------------------------------
 
@@ -386,7 +433,9 @@ final class Engine {
   // ---- Watching -----------------------------------------------------------------------
 
   func recordProgress(_ fileId: String, position: Double, duration: Double) throws -> ProgressEntry {
-    guard let f = library.files[fileId], position.isFinite, duration.isFinite else { throw EngineError("bad progress", 400) }
+    guard let f = library.files[fileId] ?? loose[fileId], position.isFinite, duration.isFinite else {
+      throw EngineError("bad progress", 400)
+    }
     let entry = ProgressEntry(
       position: position > 0 ? position : 0, duration: duration, updatedAt: nowMs(),
       watched: isWatched(f.id, position: position, duration: duration))
@@ -421,16 +470,21 @@ final class Engine {
 
   func playInfo(_ fileId: String) async throws -> PlayInfo {
     let f = try file(fileId)
-    guard let t = titles[f.titleId] else { throw EngineError("unknown title", 404) }
-    let season = f.season >= 0 && f.season < t.seasons.count ? t.seasons[f.season] : nil
-    analyzer.prioritize(t.id, season?.id)
-    // Previews for this video first, then the episodes after it (Next Episode card).
-    let eps = season?.episodes ?? []
-    let i = eps.firstIndex(of: f.id) ?? -1
-    let next = f.season + 1 >= 0 && f.season + 1 < t.seasons.count ? t.seasons[f.season + 1] : nil
-    let nextSeasonStart = next.map { $0.isExtras ? [] : Array($0.episodes.prefix(1)) } ?? []
-    let before = i >= 0 ? Array(eps[..<i]) : Array(eps.dropLast())  // eps.slice(0, i)
-    trickplay.prioritize([f.id] + eps[(i + 1)...] + nextSeasonStart + before)
+    if library.files[f.id] == nil {
+      // Opened from outside the library: its own previews only.
+      trickplay.prioritize([f.id])
+    } else {
+      guard let t = titles[f.titleId] else { throw EngineError("unknown title", 404) }
+      let season = f.season >= 0 && f.season < t.seasons.count ? t.seasons[f.season] : nil
+      analyzer.prioritize(t.id, season?.id)
+      // Previews for this video first, then the episodes after it (Next Episode card).
+      let eps = season?.episodes ?? []
+      let i = eps.firstIndex(of: f.id) ?? -1
+      let next = f.season + 1 >= 0 && f.season + 1 < t.seasons.count ? t.seasons[f.season + 1] : nil
+      let nextSeasonStart = next.map { $0.isExtras ? [] : Array($0.episodes.prefix(1)) } ?? []
+      let before = i >= 0 ? Array(eps[..<i]) : Array(eps.dropLast())  // eps.slice(0, i)
+      trickplay.prioritize([f.id] + eps[(i + 1)...] + nextSeasonStart + before)
+    }
     let info = await media.probe(f)
     let subtitles = await subtitleTracks(f)
     let online = onlineSubs.status()

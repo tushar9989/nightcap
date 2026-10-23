@@ -128,4 +128,29 @@ private func scan(_ root: String, _ kind: String = "auto") -> [TitleDesc] {
       titles.map { t in "\(t.kind) \(t.name) \(t.year.map(String.init) ?? "null") \(t.seasons.map { "\($0.name):\($0.episodes.count)" }.joined(separator: ","))" },
       ["show Doctor Who 2005 Season 1:2", "show Severance null Season 2:2", "movie Some Movie 2021 :1"])
   }
+
+  t.test("a video opened on its own takes its subtitles and thumbnail from its folder") {
+    let root = tree([
+      "Downloads/Severance.S02E01.1080p.mkv", "Downloads/Severance.S02E01.1080p.en.srt", "Downloads/Severance.S02E01.1080p-thumb.jpg",
+      "Downloads/Severance.S02E02.1080p.mkv", "Downloads/Severance.S02E02.1080p.en.srt",
+      "Downloads/Subs/Severance.S02E01.1080p/2_English.srt", "Downloads/Other Show/Other.S01E01.mkv",
+      "Downloads/Other Show/Other.S01E01.srt", "Downloads/Clip-sample.mp4",
+    ])
+    let path = join(root, "Downloads/Severance.S02E01.1080p.mkv")
+    guard let f = Scanner.looseFile(path) else { throw TestFailure(description: "not opened") }
+    try expectEqual(f.id, hashId(path))
+    try expectEqual(f.name, "Severance.S02E01.1080p")
+    try expectEqual(f.titleId, "")
+    try expectEqual(f.season, -1)
+    try expectEqual(f.thumb, join(root, "Downloads/Severance.S02E01.1080p-thumb.jpg"))
+    try expectEqual(
+      f.subs, [
+        SubRef(path: join(root, "Downloads/Severance.S02E01.1080p.en.srt"), label: "English"),
+        SubRef(path: join(root, "Downloads/Subs/Severance.S02E01.1080p/2_English.srt"), label: "English"),
+      ])
+    // A file the scan passes over by its name still opens.
+    try expectEqual(Scanner.looseFile(join(root, "Downloads/Clip-sample.mp4"))?.name, "Clip-sample")
+    try expectEqual(Scanner.looseFile(join(root, "Downloads/Missing.mkv")), nil)
+    try expectEqual(Scanner.looseFile(join(root, "Downloads/Subs")), nil)
+  }
 }

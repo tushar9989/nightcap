@@ -431,7 +431,8 @@ private struct ControlsRow: View {
   }
 
   private var midTitle: String {
-    guard let fid = player.fid, let t = player.title else { return "" }
+    guard let fid = player.fid else { return "" }
+    guard let t = player.title else { return app.file(fid)?.name ?? "" }
     return t.isShow ? "\(app.epCode(fid)) · \(app.file(fid)?.name ?? "")" : t.name
   }
 
@@ -603,10 +604,11 @@ private struct NextCard: View {
 
   var body: some View {
     let name = app.file(next)?.name ?? ""
+    let code = app.epCode(next)
     VStack(alignment: .leading, spacing: 0) {
       ArtBox(.file(next, width: 480), seed: name, radius: 0, previewing: next)
       VStack(alignment: .leading, spacing: 0) {
-        Text("Up next · \(app.epCode(next))")
+        Text(code.isEmpty ? "Up next" : "Up next · \(code)")
           .textCase(.uppercase)
           .font(.system(size: 12))
           .tracking(0.96)
@@ -731,7 +733,7 @@ private struct PeekCard: View {
         if let p, p.duration != 0 { ProgressEdge(fraction: AppModel.fraction(p)) }
       }
       VStack(alignment: .leading, spacing: 3) {
-        Text("\(app.epCode(next)) · \(f?.name ?? "")")
+        Text([app.epCode(next), f?.name ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
           .underline(hovering)
           .font(.system(size: 15, weight: .bold))
           .lineLimit(1)

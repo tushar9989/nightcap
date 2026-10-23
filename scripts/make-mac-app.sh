@@ -145,6 +145,24 @@ else
   echo "No icon: the SVG could not be rendered." >&2
 fi
 
+# Video files: Nightcap is offered in Finder's Open With (an alternate, so it
+# takes no file type over until chosen there). Matroska, Ogg video, VOB and
+# DivX have no type in macOS itself (other players declare them), so the
+# app declares them too, under the same names.
+DOC_TYPES=""
+for t in public.movie public.mpeg-4 com.apple.m4v-video org.matroska.mkv org.webmproject.webm com.apple.quicktime-movie \
+  public.avi com.microsoft.windows-media-wmv com.adobe.flash.video public.mpeg public.mpeg-2-transport-stream \
+  public.avchd-mpeg-2-transport-stream public.3gpp org.xiph.ogg-video org.videolan.vob org.videolan.divx; do
+  DOC_TYPES="$DOC_TYPES<string>$t</string>"
+done
+imported() { # identifier, description, extension
+  printf '<dict><key>UTTypeIdentifier</key><string>%s</string><key>UTTypeDescription</key><string>%s</string>' "$1" "$2"
+  printf '<key>UTTypeConformsTo</key><array><string>public.movie</string></array>'
+  printf '<key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>%s</string></array></dict></dict>' "$3"
+}
+IMPORTED="$(imported org.matroska.mkv "Matroska video" mkv)$(imported org.xiph.ogg-video "Ogg video" ogv)"
+IMPORTED="$IMPORTED$(imported org.videolan.vob "DVD video" vob)$(imported org.videolan.divx "DivX video" divx)"
+
 # NightcapLegacyData: the earlier Nightcap's data, which the first launch copies.
 cat >"$C/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -154,8 +172,8 @@ cat >"$C/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Nightcap</string>
   <key>CFBundleDisplayName</key><string>Nightcap</string>
   <key>CFBundleIdentifier</key><string>local.nightcap.app</string>
-  <key>CFBundleVersion</key><string>3</string>
-  <key>CFBundleShortVersionString</key><string>0.3.0</string>
+  <key>CFBundleVersion</key><string>4</string>
+  <key>CFBundleShortVersionString</key><string>0.4.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>Nightcap</string>
   <key>CFBundleIconFile</key><string>Nightcap</string>
@@ -164,6 +182,15 @@ cat >"$C/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
   <key>NightcapLegacyData</key><string>$ROOT/data</string>
+  <key>CFBundleDocumentTypes</key>
+  <array><dict>
+    <key>CFBundleTypeName</key><string>Video</string>
+    <key>CFBundleTypeRole</key><string>Viewer</string>
+    <key>LSHandlerRank</key><string>Alternate</string>
+    <key>LSItemContentTypes</key><array>$DOC_TYPES</array>
+  </dict></array>
+  <key>UTImportedTypeDeclarations</key>
+  <array>$IMPORTED</array>
 </dict>
 </plist>
 PLIST
@@ -188,6 +215,8 @@ if [ -f "$OLD/Contents/Info.plist" ] && grep -q "local.marquee.launcher" "$OLD/C
 fi
 mv "$STAGE" "$APP"
 touch "$APP"
+# Finder's Open With lists it right away, not after Finder next notices it.
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" || true
 
 echo "Created $APP ($(du -sh "$APP" | awk '{print $1}'), macOS $MIN or later)"
 echo "Open it from Finder, Launchpad or Spotlight. Drag it to the Dock to keep it there."

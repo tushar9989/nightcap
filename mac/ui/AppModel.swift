@@ -42,6 +42,8 @@ final class AppModel {
   private(set) var status: EngineStatus
   @ObservationIgnored private(set) var titles: [String: Title] = [:]
   @ObservationIgnored private var locations: [String: Location] = [:]
+  /// Videos opened together from outside the library, the latest last: Next goes through them in order.
+  @ObservationIgnored private var openedRuns: [[String]] = []
 
   init() {
     engine = Engine()
@@ -147,8 +149,18 @@ final class AppModel {
     return main.isEmpty ? t.seasons.flatMap(\.episodes) : main
   }
 
+  /// Videos opened together (Finder, File › Open), in the order they play.
+  /// One opened on its own again has nothing after it.
+  func opened(_ fids: [String]) {
+    if !fids.isEmpty { openedRuns.append(fids) }
+  }
+
   func nextAfter(_ fid: String) -> String? {
-    guard let w = location(fid) else { return nil }
+    guard let w = location(fid) else {
+      // Not in the library: the video opened after it, if any.
+      guard let run = openedRuns.last(where: { $0.contains(fid) }), let i = run.firstIndex(of: fid) else { return nil }
+      return i + 1 < run.count ? run[i + 1] : nil
+    }
     if !AppModel.isMain(w.season) || !w.title.isShow {
       return w.index + 1 < w.season.episodes.count ? w.season.episodes[w.index + 1] : nil
     }

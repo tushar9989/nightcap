@@ -81,6 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
   private var controllers: [WindowController] = []
   private var monitors: [Any] = []
   private var refreshTimer: Timer?
+  /// Videos Finder asked to open before the app had finished launching.
+  private var pendingOpen: [URL]? = []
 
   init(app: AppModel) {
     self.app = app
@@ -100,6 +102,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     RunLoop.main.add(timer, forMode: .common)
     refreshTimer = timer
     NSApp.activate()
+    let pending = pendingOpen ?? []
+    pendingOpen = nil
+    if !pending.isEmpty { openVideos(pending) }
+  }
+
+  /// Videos opened with Nightcap in Finder (Open With, a double click once it is
+  /// the default, a drop on the Dock icon). On a launch this comes before
+  /// applicationDidFinishLaunching.
+  func application(_ application: NSApplication, open urls: [URL]) {
+    if pendingOpen != nil {
+      pendingOpen! += urls
+    } else {
+      openVideos(urls)
+    }
   }
 
   func applicationWillTerminate(_ note: Notification) {
@@ -139,6 +155,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
   @objc func newWindow(_ sender: Any?) {
     openWindow()
+  }
+
+  /// The window in front, even while another app is active (keyWindow is nil then).
+  private func frontController() -> WindowController? {
+    controller(NSApp.keyWindow) ?? NSApp.orderedWindows.lazy.compactMap { self.controller($0) }.first ?? controllers.last
+  }
+
+  /// Plays the videos in the window in front (replacing what plays there), else in a new one.
+  private func openVideos(_ urls: [URL]) {
+    let paths = urls.filter(\.isFileURL).map(\.path)
+    guard !paths.isEmpty else { return }
+    let c = frontController() ?? openWindow()
+    if c.window.isMiniaturized { c.window.deminiaturize(nil) }
+    c.window.makeKeyAndOrderFront(nil)
+    NSApp.activate()
+    Task { await c.model.openFiles(paths) }
+  }
+
+  @objc func openVideosPanel(_ sender: Any?) {
+    let c = frontController() ?? openWindow()
+    c.window.makeKeyAndOrderFront(nil)
+    c.model.chooseVideos()
   }
 
   @objc func showSettings(_ sender: Any?) {
@@ -217,6 +255,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     app.addItem(item("Quit Nightcap", #selector(NSApplication.terminate(_:)), "q"))
     let file = NSMenu(title: "File")
     file.addItem(item("New Window", #selector(newWindow(_:)), "n"))
+    file.addItem(item("Open…", #selector(openVideosPanel(_:)), "o"))
+    file.addItem(.separator())
     file.addItem(item("Close Window", #selector(NSWindow.performClose(_:)), "w"))
     let edit = NSMenu(title: "Edit")
     edit.addItem(item("Undo", Selector(("undo:")), "z"))

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // A window: the sidebar, the page it shows, and the player over them.
 
@@ -159,6 +160,49 @@ final class WindowModel {
       guard response == .OK, let url = panel.url else { return }
       let kind = WindowModel.folderKinds[max(0, popup.indexOfSelectedItem)].kind
       Task { @MainActor in await self?.add(url.path, kind: kind) }
+    }
+  }
+
+  // ---- Videos from outside the library --------------------------------------------------------
+
+  /// What File › Open offers: the videos a scan takes, and any other movie.
+  static let videoTypes: [UTType] =
+    [.movie] + Scanner.videoExt.sorted().map { UTType(filenameExtension: String($0.dropFirst()), conformingTo: .movie) ?? .movie }
+
+  /// The Mac's file chooser, for videos to play.
+  func chooseVideos() {
+    guard let window, window.attachedSheet == nil else { return }
+    let panel = NSOpenPanel()
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = true
+    panel.allowedContentTypes = WindowModel.videoTypes
+    panel.prompt = "Play"
+    panel.message = "Choose videos to play. They don't need to be in your library."
+    panel.beginSheetModal(for: window) { [weak self] response in
+      guard response == .OK else { return }
+      let paths = panel.urls.map(\.path)
+      Task { @MainActor in await self?.openFiles(paths) }
+    }
+  }
+
+  /// Plays videos opened from Finder or File › Open: the first now, the others
+  /// after it in name order (Next). Library videos play as they do from its pages.
+  func openFiles(_ paths: [String]) async {
+    var fids: [String] = []
+    var unreadable: [String] = []
+    for p in paths.stableSorted(by: { naturalCompare(basename($0), basename($1)) }) {
+      if let fid = await app.engine.openPath(p) {
+        if !fids.contains(fid) { fids.append(fid) }
+      } else {
+        unreadable.append(basename(p))
+      }
+    }
+    app.refresh()
+    app.opened(fids)
+    if let first = fids.first { play(first) }
+    if !unreadable.isEmpty {
+      toast(unreadable.count == 1 ? "Could not open “\(unreadable[0])”" : "Could not open \(unreadable.count) of those files", ms: 5000)
     }
   }
 

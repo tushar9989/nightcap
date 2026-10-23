@@ -38,6 +38,13 @@ shows and movies; each title has its own page with seasons and episodes.
   timed for your exact file), optional automatic download for episodes that
   have none, **sync to the dialogue** done locally (see below), manual timing
   nudges, and adverts stripped from subtitle files.
+- **A video player for any file** – Nightcap is in Finder's **Open With**
+  menu for video files, takes files dropped on its Dock icon, and has
+  **File → Open…** (⌘O). A video from your library plays as part of its
+  show; any other plays on its own, with resume, subtitles (next to it, in a
+  `Subs` folder beside it, embedded, or online), seek-bar previews, and Next
+  through the files opened together. To make it the default for a kind of
+  file: Finder → **Get Info** on one → **Open with: Nightcap** → **Change All…**
 - Audio-track switching, media keys / Now Playing, full screen.
 
 ## Requirements
@@ -58,7 +65,8 @@ Nightcap is one native app in one process: AppKit and SwiftUI windows, a
 player built on ffmpeg's libraries, and the engine (scanning, detection,
 previews, subtitles) running inside it. There is no server and no browser.
 Quitting it (⌘Q, or closing its last window) saves everything and ends every
-ffmpeg run it started; so does `kill`. ⌘N opens another window.
+ffmpeg run it started; so does `kill`. ⌘N opens another window; a video
+opened from Finder plays in the window in front.
 macOS will ask once for permission when a folder lives in Downloads, Desktop or
 Documents (again after the app is rebuilt).
 
@@ -165,7 +173,7 @@ and Homebrew's ffmpeg.
 mac/
   engine/               the engine (no UI)
     Engine.swift        the library, progress, settings, play info, subtitles: what the windows call
-    Scanner.swift       folders -> shows/seasons/episodes/movies
+    Scanner.swift       folders -> shows/seasons/episodes/movies; a video opened on its own
     Media.swift         ffprobe, thumbnails, local and embedded subtitles
     Analysis.swift      detection queue + persisted index, decoding, credit frames
     Fingerprint.swift   fingerprint + matching (unit-tested)
@@ -181,9 +189,9 @@ mac/
     ncdecoder.c         ffmpeg's libraries: open, seek, decode video (VideoToolbox for HD) and audio
     MediaPlayer.swift   macOS sample-buffer renderers on one clock; speed, volume boost, audio tracks
   ui/
-    main.swift          the app: windows, menus, quitting, carrying over the earlier data
+    main.swift          the app: windows, menus, files from Finder, quitting, carrying over the earlier data
     AppModel.swift      the engine's state for the windows; what plays next, Watching
-    Window.swift        a window: routes, search, keys, folder picker, toasts
+    Window.swift        a window: routes, search, keys, folder and file pickers, toasts
     Sidebar.swift, LibraryPages.swift, SettingsPage.swift
     PlayerModel.swift, PlayerView.swift, PlayerPanels.swift, NowPlaying.swift, Prefs.swift
     Art.swift, Theme.swift
