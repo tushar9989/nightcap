@@ -75,13 +75,12 @@ private struct SubtitlesLayer: View {
   let size: CGSize
 
   var body: some View {
-    let fontSize = min(38, max(18, size.width * 0.024))
+    let font = Self.font(min(38, max(18, size.width * 0.024)))
     // The pages' line-height 1.35: what it adds to the font's own line height
     // goes between lines, and half of it below the last one.
-    let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
-    let leading = max(0, fontSize * 1.35 - (font.ascender - font.descender + font.leading))
+    let leading = max(0, font.pointSize * 1.35 - (font.ascender - font.descender + font.leading))
     let label = clock.subs.reduce(Text(verbatim: "")) { text, run in Text("\(text)\(styled(run))") }
-      .font(.system(size: fontSize, weight: .semibold))
+      .font(Font(font))
       .lineSpacing(leading)
       .multilineTextAlignment(.center)
     VStack(spacing: 0) {
@@ -107,6 +106,14 @@ private struct SubtitlesLayer: View {
     .frame(width: size.width, height: size.height)
     .animation(.easeOut(duration: 0.3), value: idle)
     .allowsHitTesting(false)
+  }
+
+  /// Avenir Next Demi Bold, sized so its lowercase letters are as tall as the
+  /// system font's semibold at `size` (the size the pages chose).
+  private static func font(_ size: CGFloat) -> NSFont {
+    let system = NSFont.systemFont(ofSize: size, weight: .semibold)
+    guard let face = NSFont(name: "AvenirNext-DemiBold", size: size) else { return system }
+    return NSFont(name: "AvenirNext-DemiBold", size: size * system.xHeight / face.xHeight) ?? system
   }
 
   private func styled(_ run: CueRun) -> Text {
