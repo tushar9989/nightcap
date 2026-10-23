@@ -76,22 +76,34 @@ private struct SubtitlesLayer: View {
 
   var body: some View {
     let fontSize = min(38, max(18, size.width * 0.024))
+    // The pages' line-height 1.35: what it adds to the font's own line height
+    // goes between lines, and half of it below the last one.
+    let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+    let leading = max(0, fontSize * 1.35 - (font.ascender - font.descender + font.leading))
+    let label = clock.subs.reduce(Text(verbatim: "")) { text, run in Text("\(text)\(styled(run))") }
+      .font(.system(size: fontSize, weight: .semibold))
+      .lineSpacing(leading)
+      .multilineTextAlignment(.center)
     VStack(spacing: 0) {
       Spacer(minLength: 0)
       if !clock.subs.isEmpty {
-        clock.subs.reduce(Text(verbatim: "")) { text, run in Text("\(text)\(styled(run))") }
-          .font(.system(size: fontSize, weight: .semibold))
-          .lineSpacing(fontSize * 0.15)
-          .multilineTextAlignment(.center)
+        label
           .foregroundStyle(.white)
-          .shadow(color: .black, radius: 3)
-          .shadow(color: .black, radius: 1.5)
-          .shadow(color: .black, radius: 1.5, y: 2)
+          .background {
+            // The pages' text-shadow (0 0 6px, 0 0 3px, 0 2px 3px, black). CSS draws each
+            // shadow from the letters alone; stacked .shadow()s would shadow the shadows
+            // too, a hard black outline. A CSS blur of b is a Gaussian of b/2, as .blur's radius.
+            ZStack {
+              label.foregroundStyle(.black).blur(radius: 3)
+              label.foregroundStyle(.black).blur(radius: 1.5)
+              label.foregroundStyle(.black).offset(y: 2).blur(radius: 1.5)
+            }
+          }
           .fixedSize(horizontal: false, vertical: true)
       }
     }
     .padding(.horizontal, size.width * 0.06)
-    .padding(.bottom, idle ? size.height * 0.07 : 150)
+    .padding(.bottom, (idle ? size.height * 0.07 : 150) + leading / 2)
     .frame(width: size.width, height: size.height)
     .animation(.easeOut(duration: 0.3), value: idle)
     .allowsHitTesting(false)
@@ -261,7 +273,7 @@ private struct ScrubBar: View {
       .frame(width: w, height: 22)
       .animation(.easeOut(duration: 0.12), value: lit)
       .contentShape(Rectangle())
-      .overlay(alignment: .bottomLeading) {
+      .overlay(alignment: .topLeading) {
         if lit { tip(width: w, duration: dur) }
       }
       .onContinuousHover { phase in
@@ -321,11 +333,11 @@ private struct ScrubBar: View {
     let half: CGFloat = trick != nil ? ScrubBar.thumbWidth / 2 + 4 : 30
     let x = max(half, min(w - half, pointerX))
     VStack(spacing: 4) {
-      if let trick, let fid = player.fid {
+      if let trick {
         let h = (trick.height * Double(ScrubBar.thumbWidth) / trick.width).rounded()
         ZStack {
           Color.black
-          if let frame = Previews.cachedFrame(fid, trick, t) {
+          if let frame = player.trickFrame(t) {
             Image(decorative: frame, scale: 1).resizable()
           }
         }
@@ -341,8 +353,10 @@ private struct ScrubBar: View {
     .padding(.horizontal, 8)
     .background(RoundedRectangle(cornerRadius: 4).fill(Color(red: 20 / 255, green: 20 / 255, blue: 20 / 255).opacity(0.9)))
     .fixedSize()
-    .alignmentGuide(.leading) { d in d.width / 2 - x }
-    .alignmentGuide(.bottom) { d in d.height + 22 }
+    // Centred on x, just above the bar: a zero-size frame there, which the tip
+    // overflows upwards. (An overlay ignores the alignment guides of `if` content.)
+    .frame(width: 0, height: 0, alignment: .bottom)
+    .offset(x: x)
     .allowsHitTesting(false)
   }
 }

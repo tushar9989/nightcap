@@ -120,7 +120,7 @@ enum Previews {
   }
 
   /// The frame nearest to `t`: its sheet, and where in the sheet (pixels).
-  private static func place(_ m: TrickplayManifest, _ t: Double) -> (sheet: Int, rect: CGRect) {
+  static func place(_ m: TrickplayManifest, _ t: Double) -> (sheet: Int, rect: CGRect) {
     let i = Int(max(0, min(Double(m.count - 1), jsRound(t / m.interval))))
     let per = m.cols * m.rows
     let k = i % per
@@ -129,7 +129,8 @@ enum Previews {
 
   private static func sheetKey(_ fid: String, _ m: TrickplayManifest, _ n: Int) -> String { "\(fid)-\(m.key)-\(n)" }
 
-  private static func sheet(_ fid: String, _ m: TrickplayManifest, _ n: Int) async -> CGImage? {
+  /// A whole sheet, decoded off the main thread (or from the cache).
+  static func sheet(_ fid: String, _ m: TrickplayManifest, _ n: Int) async -> CGImage? {
     let key = sheetKey(fid, m, n)
     if let hit = sheets.object(forKey: key as NSString) { return hit.image }
     if let running = inflight[key] { return await running.value }
@@ -142,23 +143,9 @@ enum Previews {
     return image
   }
 
-  /// The frame nearest to `t`, if its sheet is already decoded.
-  static func cachedFrame(_ fid: String, _ m: TrickplayManifest, _ t: Double) -> CGImage? {
-    let p = place(m, t)
-    return sheets.object(forKey: sheetKey(fid, m, p.sheet) as NSString)?.image.cropping(to: p.rect)
-  }
-
   static func frame(_ fid: String, _ m: TrickplayManifest, _ t: Double) async -> CGImage? {
     let p = place(m, t)
     return await sheet(fid, m, p.sheet)?.cropping(to: p.rect)
-  }
-
-  /// Decodes every sheet ahead of time (the seek bar's thumbnails), one after another.
-  static func preload(_ fid: String, _ m: TrickplayManifest) async {
-    for n in 0..<m.sheets {
-      if Task.isCancelled { return }
-      _ = await sheet(fid, m, n)
-    }
   }
 
   /// Moments worth showing: spread over the video, after the intro and before the credits.

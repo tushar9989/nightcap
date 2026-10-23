@@ -95,6 +95,8 @@ final class PlayerModel {
   /// The episode the Next card shows, while it shows.
   private(set) var nextCard: String?
   private(set) var trick: TrickplayManifest?
+  /// The decoded sheets of `trick`, by number, kept while the video plays.
+  private(set) var trickSheets: [Int: CGImage] = [:]
   private(set) var idle = false
   /// The seek bar is being dragged, to `dragTime`.
   var dragging = false
@@ -223,6 +225,8 @@ final class PlayerModel {
     timer?.invalidate()
     timer = nil
     for task in [idleTask, saveTask, spinnerTask, countTask, previewTask] { task?.cancel() }
+    trick = nil
+    trickSheets = [:]
     for task in hoverTimers.values { task.cancel() }
     hoverTimers = [:]
     closePanel()
@@ -248,6 +252,7 @@ final class PlayerModel {
     onlineQuery = ""
     syncing = nil
     trick = nil
+    trickSheets = [:]
     previewTask?.cancel()
     lastTick = nil
     introSkipped = false
@@ -393,7 +398,9 @@ final class PlayerModel {
   }
 
   // Seek-bar thumbnails: made in the background on first play (about a
-  // second per episode), so keep asking until they exist.
+  // second per episode), so keep asking until they exist. The player keeps
+  // the decoded sheets itself: a 45-minute episode's take about 100 MB, more
+  // than the shared cache holds, and a sheet it let go never came back.
   private func loadPreviews(_ fid: String) {
     previewTask?.cancel()
     previewTask = Task {
@@ -401,12 +408,23 @@ final class PlayerModel {
         if Task.isCancelled || self.fid != fid { return }
         if let m = Previews.manifest(fid) {
           trick = m
-          await Previews.preload(fid, m)
+          for n in 0..<m.sheets {
+            let sheet = await Previews.sheet(fid, m, n)
+            if Task.isCancelled || self.fid != fid { return }
+            if let sheet { trickSheets[n] = sheet }
+          }
           return
         }
         await sleep(seconds: 3)
       }
     }
+  }
+
+  /// The seek-bar thumbnail nearest to `t`, once its sheet is decoded.
+  func trickFrame(_ t: Double) -> CGImage? {
+    guard let m = trick else { return nil }
+    let p = Previews.place(m, t)
+    return trickSheets[p.sheet]?.cropping(to: p.rect)
   }
 
   // ---- Volume (0...200%) and speed (0.25...3×, remembered) ----------------------------------
