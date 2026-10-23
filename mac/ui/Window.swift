@@ -337,7 +337,7 @@ struct WindowRoot: View {
     let search = Binding(get: { win.searchText }, set: { win.typeSearch($0) })
     NavigationSplitView(columnVisibility: $win.columns) {
       Sidebar()
-        .navigationSplitViewColumnWidth(min: 190, ideal: 236, max: 340)
+        .navigationSplitViewColumnWidth(min: 190, ideal: 280, max: 360)
     } detail: {
       PageHost()
     }

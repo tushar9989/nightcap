@@ -39,7 +39,7 @@ struct OnlineSearch {
 
 /// The buttons that open something while the pointer rests on them.
 enum PopupButton: Hashable {
-  case next, episodes, settings
+  case next, episodes, speed, settings
 }
 
 /// What changes many times a second: kept apart, so only the views showing it redraw.
@@ -991,6 +991,7 @@ final class PlayerModel {
   private static func panelKind(_ b: PopupButton) -> PlayerPanel? {
     switch b {
     case .episodes: .episodes
+    case .speed: .speed
     case .settings: .settings
     case .next: nil
     }
@@ -1023,7 +1024,7 @@ final class PlayerModel {
   }
 
   func panelHover(_ inside: Bool) {
-    for b in [PopupButton.episodes, .settings] {
+    for b in [PopupButton.episodes, .speed, .settings] {
       if inside {
         cancelHover(b)
       } else {

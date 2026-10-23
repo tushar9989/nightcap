@@ -577,7 +577,7 @@ private struct SpeedButton: View {
   var body: some View {
     let changed = player.speed != 1
     Button {
-      player.togglePanel(.speed)
+      player.buttonClick(.speed)
     } label: {
       HStack(spacing: 4) {
         Image(systemName: "gauge.with.dots.needle.67percent").font(.system(size: 17, weight: .medium))
@@ -593,7 +593,10 @@ private struct SpeedButton: View {
     .buttonStyle(PressStyle())
     .foregroundStyle(changed ? AnyShapeStyle(Theme.boost) : AnyShapeStyle(.primary))
     .animation(.easeOut(duration: 0.15), value: hovering)
-    .onHover { hovering = $0 }
+    .onHover { inside in
+      hovering = inside
+      player.buttonHover(.speed, inside)
+    }
     .help("Playback speed ([ and ])")
   }
 }

@@ -11,9 +11,10 @@ shows and movies; each title has its own page with seasons and episodes.
 
 - **A Mac app in macOS 26's design** – a floating glass sidebar, Back/Forward
   and search in the toolbar, glass player controls, Settings in its own
-  window (⌘,), light or dark as the system is. Every title and episode has a
-  picture chosen from its own frames: sharp, well exposed, faces before
-  scenery, no black frames, captions, screens or documents.
+  window (⌘,), light or dark as the system is. The sidebar lists each title
+  with its picture and what's next or how long it is. Every title and
+  episode has a picture chosen from its own frames: sharp, well exposed,
+  faces before scenery, no black frames, captions, screens or documents.
 - **Library from folders** – add any number of folders (local, external drives).
   Season subfolders become seasons; release-style names (`Show.S01E02…`,
   `Show Season 01 Episode 02 - Title`, `1x02`, `[Group] Show - 02`) are parsed;
@@ -33,7 +34,8 @@ shows and movies; each title has its own page with seasons and episodes.
   pages, Watching and the player's episode list), and an animated Next
   Episode card.
   In the player, resting on Next shows the next episode playing its preview,
-  and resting on Episodes or Subtitles opens that menu (a click keeps it open).
+  and resting on Episodes, Speed or Subtitles opens that menu (a click keeps
+  it open).
   Made locally from keyframes, about a second and 2 MB per episode.
 - **Volume up to 200%** (like VLC), with a limiter so boosted audio doesn't clip harshly.
 - **Playback speed 0.25×–3×** with pitch-corrected voices, remembered across

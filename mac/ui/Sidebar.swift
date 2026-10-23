@@ -32,8 +32,7 @@ struct Sidebar: View {
       if !watching.isEmpty {
         Section("Watching", isExpanded: $watchingOpen) {
           ForEach(watching) { w in
-            TitleRow(title: w.title, note: w.title.isShow ? app.epCode(w.next.fileId) : nil, watching: w)
-              .tag(SideItem.title(w.title.id, list: 0))
+            TitleRow(title: w.title, watching: w).tag(SideItem.title(w.title.id, list: 0))
           }
         }
       }
@@ -77,22 +76,28 @@ struct Sidebar: View {
   }
 }
 
-/// A show or film: a small picture, its name, and (Watching) the episode up next.
+/// A show or film: its picture, its name, and below it the episode up next
+/// and how far along it is (Watching), or how long it is.
 private struct TitleRow: View {
   @Environment(AppModel.self) private var app
   @Environment(WindowModel.self) private var win
   let title: Title
-  var note: String? = nil
   var watching: Watching? = nil
 
   var body: some View {
-    Label {
-      Text(title.name).lineLimit(1).truncationMode(.tail)
-    } icon: {
-      ArtBox(.title(title.id, width: 320), radius: 3)
-        .frame(width: 30)
+    HStack(spacing: 10) {
+      ArtBox(art, radius: 5) {
+        if let f = fraction { ProgressEdge(fraction: f, small: true) }
+      }
+      .frame(width: 52)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(title.name).lineLimit(1).truncationMode(.tail)
+        if !detail.isEmpty {
+          Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+        }
+      }
     }
-    .badge(note.map { Text($0).monospacedDigit() })
+    .padding(.vertical, 3)
     .help(title.name)
     .contextMenu {
       let nu = watching?.next ?? app.nextUp(title)
@@ -101,6 +106,23 @@ private struct TitleRow: View {
         Button("Remove from Watching") { app.setHidden(app.engine.hide(title.id)) }
       }
     }
+  }
+
+  private var art: ArtSource {
+    if let nu = watching?.next { return .file(nu.fileId, width: 320) }
+    return .title(title.id, width: 320)
+  }
+
+  private var detail: String {
+    guard let nu = watching?.next else { return app.titleMeta(title) }
+    if title.isShow { return [app.epCode(nu.fileId), app.file(nu.fileId)?.name ?? ""].filter { !$0.isEmpty }.joined(separator: " · ") }
+    let d = app.file(nu.fileId)?.duration ?? 0
+    return nu.resume && d != 0 ? "\(fmtDur(d - nu.start)) left" : "Up next"
+  }
+
+  private var fraction: Double? {
+    guard let nu = watching?.next, nu.resume, let p = app.progress(nu.fileId), p.duration != 0 else { return nil }
+    return AppModel.fraction(p)
   }
 }
 

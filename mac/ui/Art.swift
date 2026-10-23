@@ -293,16 +293,18 @@ struct ArtBox<Overlay: View>: View {
 /// Progress along the bottom of a picture.
 struct ProgressEdge: View {
   var fraction: Double
+  /// For a small picture (the sidebar's): thinner, nearer the edge.
+  var small = false
 
   var body: some View {
     GeometryReader { g in
-      let inset = max(6, min(12, g.size.width * 0.04))
+      let inset = small ? 4 : max(6, min(12, g.size.width * 0.04))
       let f = max(0, min(1, fraction.isFinite ? fraction : 0))
       ZStack(alignment: .leading) {
         Capsule().fill(Color.black.opacity(0.4))
-        Capsule().fill(Theme.accent).frame(width: max(4, (g.size.width - 2 * inset) * f))
+        Capsule().fill(Theme.accent).frame(width: max(small ? 3 : 4, (g.size.width - 2 * inset) * f))
       }
-      .frame(height: 4)
+      .frame(height: small ? 3 : 4)
       .padding(.horizontal, inset)
       .padding(.bottom, inset)
       .frame(width: g.size.width, height: g.size.height, alignment: .bottom)
