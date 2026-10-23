@@ -9,6 +9,11 @@ shows and movies; each title has its own page with seasons and episodes.
 
 ## Features
 
+- **A Mac app in macOS 26's design** – a floating glass sidebar, Back/Forward
+  and search in the toolbar, glass player controls, Settings in its own
+  window (⌘,), light or dark as the system is. Every title and episode has a
+  picture chosen from its own frames: sharp, well exposed, faces before
+  scenery, no black frames, captions, screens or documents.
 - **Library from folders** – add any number of folders (local, external drives).
   Season subfolders become seasons; release-style names (`Show.S01E02…`,
   `Show Season 01 Episode 02 - Title`, `1x02`, `[Group] Show - 02`) are parsed;
@@ -49,7 +54,7 @@ shows and movies; each title has its own page with seasons and episodes.
 
 ## Requirements
 
-- macOS 26 or later (the bundled ffmpeg libraries need it). The app is built
+- macOS 26 or later (its design, and the bundled ffmpeg libraries, need it). The app is built
   for the processor of the Mac that builds it.
 - To build the app: the Xcode Command Line Tools (`xcode-select --install`)
   and [ffmpeg](https://ffmpeg.org) from Homebrew (`brew install ffmpeg`).
@@ -139,7 +144,7 @@ Stored in `~/Library/Application Support/Nightcap`: `config.json` (folders,
 settings), `progress.json` (watch progress), `library.json` (last scan),
 `analysis.json` + `fingerprints/` (detection index), `opensubtitles.json`
 (API key and sign-in token, readable by you only), `trickplay/` (preview
-thumbnails), `subs-downloaded/` +
+thumbnails), `stills/` (the frames chosen as pictures), `subs-downloaded/` +
 `subs-downloaded.json`, `subsync.json` (timing corrections), `probe.json`,
 `thumbs/`, `subs/` (caches), `nightcap.log`. Quit Nightcap and delete the
 folder to start fresh. The player's own choices (volume, speed, subtitle
@@ -157,7 +162,8 @@ Space play/pause · ←/→ 10 s (Shift: 30 s) · ↑/↓ volume (to 200%) ·
 `[` / `]` speed −/+ 0.25× (`{` / `}` fine 0.05×, `=` normal) · M mute ·
 F full screen · S skip intro · N next episode · C subtitles · G / H subtitles
 0.1 s earlier / later (Shift: 1 s) · 0–9 jump to 0–90% ·
-Esc back. In the library: `/` to search.
+Esc back. In the library: `/` or ⌘F to search · ⌘[ / ⌘] back / forward ·
+⌃⌘S sidebar · ⇧⌘O add a folder · ⌘, Settings.
 
 ## Development
 
@@ -182,6 +188,7 @@ mac/
     SubSync.swift       subtitle-to-dialogue sync (speech activity + correlation)
     Subtext.swift       subtitle text: SRT -> WebVTT, advert removal, retiming
     Trickplay.swift     preview thumbnail sheets (seek bar, episode previews)
+    Stills.swift        pictures for titles and episodes, chosen from their previews (Vision)
     Models.swift, Util.swift, JS.swift, JSDate.swift, Language.swift, FFTTables.swift, fdlibm.c
                         data types, stores, running ffmpeg; exact JavaScript behaviour where
                         the data files and results depend on it (they were made by the Node engine)
@@ -192,7 +199,7 @@ mac/
     main.swift          the app: windows, menus, files from Finder, quitting, carrying over the earlier data
     AppModel.swift      the engine's state for the windows; what plays next, Watching
     Window.swift        a window: routes, search, keys, folder and file pickers, toasts
-    Sidebar.swift, LibraryPages.swift, SettingsPage.swift
+    Sidebar.swift, LibraryPages.swift, SettingsWindow.swift
     PlayerModel.swift, PlayerView.swift, PlayerPanels.swift, NowPlaying.swift, Prefs.swift
     Art.swift, Theme.swift
   tests/                the engine's tests (a small runner; Command Line Tools have no XCTest)

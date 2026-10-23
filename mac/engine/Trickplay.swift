@@ -8,7 +8,8 @@ import Foundation
 
 @MainActor
 final class Trickplay {
-  static let version = 1
+  /// 2: thumbnail n shows n × interval even when a file's first keyframe is late (in 1, all were that much later).
+  static let version = 2
   static let width = 240
   static let cols = 10
   static let rows = 10
@@ -168,7 +169,9 @@ final class Trickplay {
     let final = join(dir, "\(f.id)-\(key)")
     let tmp = "\(final).tmp"
     let W = Trickplay.width, C = Trickplay.cols, R = Trickplay.rows
-    let vf = "fps=1/\(jsNumber(interval)):round=near,scale=\(W):trunc(\(W)/dar/2)*2,setsar=1,tile=\(C)x\(R)"
+    // The thumbnails count from 0:00, not from the first keyframe (as late as 12 s in some files):
+    // until it, they repeat it.
+    let vf = "fps=1/\(jsNumber(interval)):round=near:start_time=0,scale=\(W):trunc(\(W)/dar/2)*2,setsar=1,tile=\(C)x\(R)"
     // The file work happens off the main thread.
     let (r, names) = try await Task.detached(priority: .utility) { () throws -> (RunResult, [String]) in
       removeItem(tmp)

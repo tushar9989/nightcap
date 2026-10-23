@@ -10,17 +10,20 @@ enum ArtSource: Hashable {
   case title(String, type: String = "card", width: Int)
   /// A video's own picture, else a frame from it.
   case file(String, width: Int)
+  /// The frame of a video at a moment.
+  case moment(String, at: Double, width: Int)
 
   var key: String {
     switch self {
     case .title(let id, let type, let w): "t:\(id):\(type):\(w)"
     case .file(let id, let w): "f:\(id):\(w)"
+    case .moment(let id, let t, let w): "m:\(id):\(t):\(w)"
     }
   }
 
   var width: Int {
     switch self {
-    case .title(_, _, let w), .file(_, let w): w
+    case .title(_, _, let w), .file(_, let w), .moment(_, _, let w): w
     }
   }
 }
@@ -76,6 +79,7 @@ final class ArtCache {
       switch src {
       case .title(let id, let type, let w): path = try? await engine.titleArt(id, type: type, width: Double(w))
       case .file(let id, let w): path = try? await engine.fileArt(id, width: Double(w))
+      case .moment(let id, let t, let w): path = try? await engine.momentArt(id, at: t, width: Double(w))
       }
       guard let path else { return nil }
       let maxPixel = max(src.width, 160)
@@ -200,33 +204,36 @@ struct PreviewSlideshow: View {
 
 // ---- The 16:9 picture box ---------------------------------------------------------------------
 
-/// A 16:9 picture with a tinted placeholder; portrait art is shown whole over
-/// a blurred copy of itself. `previewing` plays the video's preview frames over it.
+/// A 16:9 picture (or, with `fill`, one filling the space it is given) on a
+/// quiet placeholder; portrait art is shown whole over a blurred copy of
+/// itself. `previewing` plays the video's preview frames over it.
 struct ArtBox<Overlay: View>: View {
   let source: ArtSource?
-  let seed: String
   var radius: CGFloat = Theme.radius
   var previewing: String? = nil
   var previewEvery = 1.1
+  var fill = false
   @ViewBuilder var overlay: Overlay
   @State private var image: CGImage?
+  @State private var missing = false
 
   init(
-    _ source: ArtSource?, seed: String, radius: CGFloat = Theme.radius, previewing: String? = nil, previewEvery: Double = 1.1,
-    @ViewBuilder overlay: () -> Overlay = { EmptyView() }
+    _ source: ArtSource?, radius: CGFloat = Theme.radius, previewing: String? = nil, previewEvery: Double = 1.1,
+    fill: Bool = false, @ViewBuilder overlay: () -> Overlay = { EmptyView() }
   ) {
     self.source = source
-    self.seed = seed
     self.radius = radius
     self.previewing = previewing
     self.previewEvery = previewEvery
+    self.fill = fill
     self.overlay = overlay()
     _image = State(initialValue: source.flatMap { ArtCache.shared.cached($0) })
   }
 
   var body: some View {
     Color.clear
-      .aspectRatio(16 / 9, contentMode: .fit)
+      .aspectRatio(fill ? nil : 16 / 9, contentMode: .fit)
+      .frame(maxWidth: fill ? .infinity : nil, maxHeight: fill ? .infinity : nil)
       .background(placeholder)
       .overlay { picture.allowsHitTesting(false) }
       .overlay {
@@ -236,25 +243,31 @@ struct ArtBox<Overlay: View>: View {
       .clipShape(RoundedRectangle(cornerRadius: radius))
       .contentShape(RoundedRectangle(cornerRadius: radius))
       .task(id: source) {
-        guard let source else { return }
+        guard let source else {
+          missing = true
+          return
+        }
         if let hit = ArtCache.shared.cached(source) {
           image = hit
           return
         }
         let loaded = await ArtCache.shared.load(source)
         if Task.isCancelled { return }
-        withAnimation(.easeOut(duration: 0.35)) { image = loaded }
+        withAnimation(.easeOut(duration: 0.35)) {
+          image = loaded
+          missing = loaded == nil
+        }
       }
   }
 
   private var placeholder: some View {
-    let hue = hashHue(seed)
-    return LinearGradient(
-      colors: [
-        Color(hue: hue, saturation: 0.42, lightness: 0.26),
-        Color(hue: (hue + 50).truncatingRemainder(dividingBy: 360), saturation: 0.45, lightness: 0.11),
-      ],
-      startPoint: .topLeading, endPoint: .bottomTrailing)
+    Rectangle()
+      .fill(.quinary)
+      .overlay {
+        if missing && image == nil {
+          Image(systemName: "film").font(.system(size: 20, weight: .light)).foregroundStyle(.tertiary)
+        }
+      }
   }
 
   @ViewBuilder private var picture: some View {
@@ -269,7 +282,7 @@ struct ArtBox<Overlay: View>: View {
             Image(decorative: image, scale: 1).resizable().scaledToFit()
           }
         } else {
-          Image(decorative: image, scale: 1).resizable().scaledToFill()
+          Image(decorative: image, scale: 1).resizable().interpolation(.high).scaledToFill()
         }
       }
       .transition(.opacity)
@@ -277,20 +290,23 @@ struct ArtBox<Overlay: View>: View {
   }
 }
 
-/// Progress along the bottom edge of a picture.
+/// Progress along the bottom of a picture.
 struct ProgressEdge: View {
   var fraction: Double
 
   var body: some View {
-    VStack(spacing: 0) {
-      Spacer(minLength: 0)
-      GeometryReader { g in
-        ZStack(alignment: .leading) {
-          Color.black.opacity(0.45)
-          Theme.accent.frame(width: g.size.width * max(0, min(1, fraction.isFinite ? fraction : 0)))
-        }
+    GeometryReader { g in
+      let inset = max(6, min(12, g.size.width * 0.04))
+      let f = max(0, min(1, fraction.isFinite ? fraction : 0))
+      ZStack(alignment: .leading) {
+        Capsule().fill(Color.black.opacity(0.4))
+        Capsule().fill(Theme.accent).frame(width: max(4, (g.size.width - 2 * inset) * f))
       }
       .frame(height: 4)
+      .padding(.horizontal, inset)
+      .padding(.bottom, inset)
+      .frame(width: g.size.width, height: g.size.height, alignment: .bottom)
+      .shadow(color: .black.opacity(0.3), radius: 2)
     }
     .allowsHitTesting(false)
   }
@@ -299,20 +315,20 @@ struct ProgressEdge: View {
 /// The round play sign shown over a picture while the pointer is on it.
 struct PlayHint: View {
   var visible: Bool
-  var size: CGFloat = 40
+  var size: CGFloat = 44
 
   var body: some View {
     ZStack {
-      LinearGradient(colors: [.black.opacity(0.1), .black.opacity(0.35)], startPoint: .top, endPoint: .bottom)
-      Circle()
-        .fill(Color(red: 20 / 255, green: 20 / 255, blue: 22 / 255).opacity(0.7))
-        .frame(width: size, height: size)
-        .shadow(color: .black.opacity(0.4), radius: 6, y: 2)
-        .overlay {
-          Image(systemName: "play.fill").font(.system(size: size * 0.42)).foregroundStyle(.white).offset(x: size * 0.04)
-        }
+      if visible {
+        Color.black.opacity(0.12)
+        Image(systemName: "play.fill")
+          .font(.system(size: size * 0.4))
+          .foregroundStyle(.white)
+          .offset(x: size * 0.04)
+          .frame(width: size, height: size)
+          .glassEffect(.regular.tint(.black.opacity(0.2)), in: .circle)
+      }
     }
-    .opacity(visible ? 1 : 0)
     .animation(.easeOut(duration: 0.2), value: visible)
     .allowsHitTesting(false)
   }

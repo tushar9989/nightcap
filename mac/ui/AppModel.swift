@@ -104,6 +104,15 @@ final class AppModel {
     if reindex { index() }
   }
 
+  // ---- Folders ----------------------------------------------------------------------------
+
+  static let folderKinds: [(kind: String, label: String)] = [("auto", "Auto-detect"), ("shows", "TV shows"), ("movies", "Movies")]
+
+  /// Adds a folder to the library and scans it.
+  func addFolder(_ path: String, kind: String) async throws {
+    apply(try await engine.addFolder(path, kind: kind))
+  }
+
   func setProgress(_ fileId: String, _ entry: ProgressEntry) {
     lib.progress[fileId] = entry
   }

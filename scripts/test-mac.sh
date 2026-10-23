@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-TARGET="$(uname -m)-apple-macos14.4"
+TARGET="$(uname -m)-apple-macos26.0"
 
 clang -O2 -target "$TARGET" -c "$ROOT/mac/engine/fdlibm.c" -o "$TMP/fdlibm.o"
 swiftc -O -swift-version 5 -target "$TARGET" -import-objc-header "$ROOT/mac/engine/Bridge.h" -o "$TMP/tests" \

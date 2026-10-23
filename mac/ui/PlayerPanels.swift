@@ -3,8 +3,11 @@ import SwiftUI
 
 // The player's panels, opened from the controls: audio, subtitles and the
 // intro and credits markers; subtitles online (OpenSubtitles.com); speed; and
-// the episodes. They sit above the controls on the right, at most as tall as
-// the window allows, as the pages' .panel did.
+// the episodes. They sit on glass above the controls on the right, at most as
+// tall as the window allows.
+
+/// Lines between a panel's parts.
+private let panelLine = Color.white.opacity(0.12)
 
 struct PlayerPanelHost: View {
   let player: PlayerModel
@@ -27,9 +30,12 @@ struct PlayerPanelHost: View {
       }
     }
     // Limits only: the panel keeps its own size, at the bottom right of this space.
-    .frame(maxWidth: max(280, size.width - 56), maxHeight: max(160, size.height - 160), alignment: .bottomTrailing)
-    .padding(.trailing, 28)
-    .padding(.bottom, 120)
+    .frame(
+      maxWidth: max(280, size.width - 2 * PlayerMetrics.margin), maxHeight: max(160, size.height - PlayerMetrics.aboveBar - 80),
+      alignment: .bottomTrailing
+    )
+    .padding(.trailing, PlayerMetrics.margin)
+    .padding(.bottom, PlayerMetrics.aboveBar)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
     .animation(.easeOut(duration: 0.2), value: player.panel)
   }
@@ -42,9 +48,8 @@ private struct PanelChrome<Content: View>: View {
 
   var body: some View {
     content
-      .background(Theme.overlay)
-      .clipShape(RoundedRectangle(cornerRadius: 6))
-      .shadow(color: .black.opacity(0.7), radius: 20, y: 10)
+      .clipShape(RoundedRectangle(cornerRadius: 22))
+      .glassEffect(playerGlass, in: .rect(cornerRadius: 22))
       // Where it is, so a click inside it keeps it open (see PlayerModel.mouseDown).
       // Only the open panel says: one switched away from reports on its way out.
       .background(
@@ -162,24 +167,28 @@ private struct PanelOption: View {
 
   var body: some View {
     Button(action: action) {
-      HStack(alignment: .firstTextBaseline, spacing: 10) {
-        Text(more ? "+" : on ? "✓" : "").frame(width: 14, alignment: .leading)
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Image(systemName: more ? "plus" : "checkmark")
+          .font(.system(size: 12, weight: .bold))
+          .opacity(more || on ? 1 : 0)
+          .frame(width: 14, alignment: .leading)
         Text(label).fixedSize(horizontal: false, vertical: true)
       }
-      .font(.system(size: 15, weight: on ? .semibold : .regular))
-      .foregroundStyle(color)
-      .padding(.vertical, 7)
-      .padding(.horizontal, 4)
+      .font(.system(size: 14, weight: on ? .semibold : .regular))
+      .foregroundStyle(style)
+      .padding(.vertical, 6)
+      .padding(.horizontal, 8)
       .frame(maxWidth: .infinity, alignment: .leading)
+      .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(hovering ? 0.1 : 0)))
       .contentShape(Rectangle())
     }
     .buttonStyle(PlainTapStyle())
     .onHover { hovering = $0 }
   }
 
-  private var color: Color {
-    if more { return hovering ? .white : Color(hex: 0x9db8f0) }
-    return on || hovering ? .white : Color(hex: 0xbbbbbb)
+  private var style: AnyShapeStyle {
+    if more { return AnyShapeStyle(Theme.accent) }
+    return on || hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)
   }
 }
 
@@ -201,12 +210,12 @@ private struct PanelButton: View {
         .multilineTextAlignment(leading ? .leading : .center)
         .padding(padding)
         .frame(maxWidth: full ? .infinity : nil, alignment: leading ? .leading : .center)
-        .background(RoundedRectangle(cornerRadius: 4).fill(Color(hex: hovering && enabled ? 0x3a3a3a : 0x2c2c2c)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(hovering && enabled ? 0.18 : 0.1)))
         .contentShape(Rectangle())
     }
-    .buttonStyle(PlainTapStyle())
-    .foregroundStyle(.white)
-    .opacity(enabled ? 1 : 0.7)
+    .buttonStyle(PressStyle())
+    .foregroundStyle(.primary)
+    .opacity(enabled ? 1 : 0.6)
     .onHover { hovering = $0 }
     .help(help ?? "")
   }
@@ -228,10 +237,10 @@ private struct SettingsPanel: View {
     PanelColumns {
       if (player.info?.probe?.audio.count ?? 0) > 1 {
         AudioColumn(player: player)
-        Theme.line.layoutValue(key: ColumnSeparator.self, value: true)
+        panelLine.layoutValue(key: ColumnSeparator.self, value: true)
       }
       SubtitlesColumn(player: player)
-      Theme.line.layoutValue(key: ColumnSeparator.self, value: true)
+      panelLine.layoutValue(key: ColumnSeparator.self, value: true)
       MarkersColumn(player: player)
         .layoutValue(key: ColumnMinWidth.self, value: 240)
     }
@@ -307,7 +316,7 @@ private struct SubtitlesColumn: View {
       }
     }
     .padding(.top, 10)
-    .overlay(alignment: .top) { Theme.line.frame(height: 1) }
+    .overlay(alignment: .top) { panelLine.frame(height: 1) }
     .padding(.top, 10)
   }
 }
@@ -329,7 +338,6 @@ private struct MarkersColumn: View {
         if !decoding.isEmpty { Text(decoding).foregroundStyle(Theme.text2) }
       }
       .font(.system(size: 13))
-      .foregroundStyle(Color(hex: 0xbbbbbb))
       .padding(.bottom, 10)
       VStack(alignment: .leading, spacing: 6) {
         MarkerButton(clock: player.clock, label: "Intro starts here") {
@@ -393,15 +401,16 @@ private struct OnlinePanel: View {
         Button {
           player.togglePanel(.settings)
         } label: {
-          HStack(spacing: 0) {
-            Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold))
+          HStack(spacing: 2) {
+            Image(systemName: "chevron.left").font(.system(size: 12, weight: .semibold))
             Text("Subtitles")
           }
+          .font(.system(size: 13))
         }
-        .buttonStyle(LinkButtonStyle(padding: EdgeInsets(top: 4, leading: 2, bottom: 4, trailing: 8)))
-        Text("Find subtitles online").font(.system(size: 17, weight: .bold))
+        .buttonStyle(QuietButtonStyle())
+        Text("Find Subtitles Online").font(.system(size: 17, weight: .bold))
       }
-      .padding(EdgeInsets(top: 12, leading: 8, bottom: 10, trailing: 16))
+      .padding(EdgeInsets(top: 14, leading: 8, bottom: 10, trailing: 16))
       if player.info?.onlineConfigured == true, let o = player.online {
         form(o)
         HugLayout(maxHeight: min(size.height * 0.46, 440)) {
@@ -413,18 +422,17 @@ private struct OnlinePanel: View {
         VStack(alignment: .leading, spacing: 12) {
           Text("Nightcap can find subtitles for this video on OpenSubtitles.com. It needs your own free API key first.")
             .fixedSize(horizontal: false, vertical: true)
-          Button("Set up in Settings") { win.go(.settings) }
-            .buttonStyle(PillButtonStyle(kind: .accent, small: true))
+          PrimaryButton("Set Up in Settings…", large: false) { win.openSettings(.subtitles) }
         }
         .font(.system(size: 14))
         .foregroundStyle(Theme.text2)
         .padding(EdgeInsets(top: 4, leading: 16, bottom: 18, trailing: 16))
         credit(nil)
           .padding(EdgeInsets(top: 10, leading: 16, bottom: 12, trailing: 16))
-          .overlay(alignment: .top) { Theme.line.frame(height: 1) }
+          .overlay(alignment: .top) { panelLine.frame(height: 1) }
       }
     }
-    .frame(width: min(640, size.width - 56))
+    .frame(width: min(640, size.width - 2 * PlayerMetrics.margin))
   }
 
   private func form(_ o: OnlineSearch) -> some View {
@@ -437,17 +445,16 @@ private struct OnlinePanel: View {
       .pickerStyle(.menu)
       .labelsHidden()
       .fixedSize()
-      FieldBox(dark: true) {
-        TextField("Show and episode, or film", text: Binding(get: { player.onlineQuery }, set: { player.onlineQuery = $0 }))
-          .autocorrectionDisabled()
-          .onSubmit { player.submitOnlineQuery() }
-          .onExitCommand { player.closePanel() }
-      }
+      TextField("Show and episode, or film", text: Binding(get: { player.onlineQuery }, set: { player.onlineQuery = $0 }))
+        .textFieldStyle(.roundedBorder)
+        .autocorrectionDisabled()
+        .onSubmit { player.submitOnlineQuery() }
+        .onExitCommand { player.closePanel() }
       Button("Search") { player.submitOnlineQuery() }
-        .buttonStyle(PillButtonStyle(small: true))
+        .buttonStyle(.bordered)
     }
     .padding(EdgeInsets(top: 0, leading: 16, bottom: 12, trailing: 16))
-    .overlay(alignment: .bottom) { Theme.line.frame(height: 1) }
+    .overlay(alignment: .bottom) { panelLine.frame(height: 1) }
   }
 
   private func results(_ o: OnlineSearch) -> some View {
@@ -481,16 +488,17 @@ private struct OnlinePanel: View {
           Text("Downloaded for this video").font(.system(size: 13)).foregroundStyle(Theme.text2)
           ForEach(mine) { s in
             HStack(spacing: 10) {
-              Text(s.label).font(.system(size: 13)).foregroundStyle(Color(hex: 0xdddddd)).fixedSize()
+              Text(s.label).font(.system(size: 13)).fixedSize()
               Text(s.release ?? "")
                 .font(.system(size: 11.5))
-                .foregroundStyle(Theme.text3)
+                .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(s.release ?? "")
               Button("Remove") { player.removeTrack(s.id) }
-                .buttonStyle(LinkButtonStyle(size: 12, padding: EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6)))
+                .font(.system(size: 12))
+                .buttonStyle(QuietButtonStyle())
             }
           }
         }
@@ -499,13 +507,13 @@ private struct OnlinePanel: View {
       credit(o.status)
     }
     .padding(EdgeInsets(top: 10, leading: 16, bottom: 12, trailing: 16))
-    .overlay(alignment: .top) { Theme.line.frame(height: 1) }
+    .overlay(alignment: .top) { panelLine.frame(height: 1) }
   }
 
   private func credit(_ status: OpenSubtitles.Status?) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
       Text("Subtitles provided by [OpenSubtitles.com](https://www.opensubtitles.com)")
-        .tint(Color(hex: 0xdddddd))
+        .tint(.primary)
       Spacer(minLength: 0)
       if let status { Text(OnlinePanel.quota(status)) }
     }
@@ -543,17 +551,19 @@ private struct Badge: View {
   var body: some View {
     Text(text)
       .font(.system(size: 11, weight: .semibold))
-      .padding(.horizontal, 6)
+      .padding(.horizontal, 7)
       .padding(.vertical, 1)
-      .foregroundStyle(kind == .good ? Theme.ok : kind == .warn ? Theme.boost : Color(hex: 0xdddddd))
-      .background(
-        RoundedRectangle(cornerRadius: 3)
-          .fill(
-            kind == .good
-              ? Color(red: 70 / 255, green: 211 / 255, blue: 105 / 255, opacity: 0.16)
-              : kind == .warn ? Color(red: 1, green: 179 / 255, blue: 71 / 255, opacity: 0.14) : Color(hex: 0x3a3a3a))
-      )
+      .foregroundStyle(color)
+      .background(Capsule().fill(kind == .plain ? Color.white.opacity(0.12) : color.opacity(0.16)))
       .help(help ?? "")
+  }
+
+  private var color: Color {
+    switch kind {
+    case .good: Theme.ok
+    case .warn: Theme.boost
+    case .plain: .primary
+    }
   }
 }
 
@@ -572,7 +582,7 @@ private struct ResultRow: View {
       VStack(alignment: .leading, spacing: 3) {
         Text(release)
           .font(.system(size: 14))
-          .foregroundStyle(Color(hex: 0xeeeeee))
+          .foregroundStyle(.primary)
           .lineLimit(1)
           .truncationMode(.tail)
         FlowLayout(spacing: 6, lineSpacing: 3) {
@@ -582,15 +592,17 @@ private struct ResultRow: View {
           if r.aiTranslated { Badge(text: "AI translated", kind: .warn) }
           if r.machineTranslated { Badge(text: "Machine translated", kind: .warn) }
           Text(meta)
-          if busy { Text(busyText).foregroundStyle(.white) }
+          if busy { Text(busyText).foregroundStyle(.primary) }
         }
         .font(.system(size: 12))
         .foregroundStyle(Theme.text2)
       }
-      .padding(.vertical, 9)
-      .padding(.horizontal, 16)
+      .padding(.vertical, 8)
+      .padding(.horizontal, 10)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(busy ? Color(hex: 0x2e2e2e) : hovering && !locked ? Color(hex: 0x333333) : .clear)
+      .background(
+        RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(busy ? 0.12 : hovering && !locked ? 0.08 : 0)))
+      .padding(.horizontal, 6)
       .contentShape(Rectangle())
     }
     .buttonStyle(PlainTapStyle())
@@ -623,14 +635,14 @@ private struct SpeedPanel: View {
       PlayerModel.speedStops.contains(player.speed)
       ? PlayerModel.speedStops : (PlayerModel.speedStops + [player.speed]).sorted()
     VStack(alignment: .leading, spacing: 0) {
-      Text("Playback speed").font(.system(size: 18, weight: .bold)).padding(.bottom, 18)
+      Text("Playback Speed").font(.system(size: 17, weight: .bold)).padding(.bottom, 18)
       HStack(alignment: .top, spacing: 0) {
         ForEach(stops, id: \.self) { sp in
           SpeedStop(speed: sp, on: sp == player.speed) { player.setSpeed(sp) }
         }
       }
       .background(alignment: .top) {
-        Color(hex: 0x5a5a5a).frame(height: 2).padding(.horizontal, 30).padding(.top, 9)
+        Color.white.opacity(0.22).frame(height: 2).padding(.horizontal, 30).padding(.top, 9)
       }
       Text("[ slower · ] faster · { } fine steps · = normal. Voices keep their pitch.")
         .font(.system(size: 13))
@@ -656,17 +668,17 @@ private struct SpeedStop: View {
             Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 5).frame(width: 30, height: 30)
             Circle().fill(Color.white).frame(width: 20, height: 20)
           } else {
-            Circle().fill(hovering ? Color.white : Color(hex: 0xb3b3b3)).frame(width: 12, height: 12)
+            Circle().fill(Color.white.opacity(hovering ? 1 : 0.7)).frame(width: 12, height: 12)
               .scaleEffect(hovering ? 1.3 : 1)
           }
         }
         .frame(width: 20, height: 20)
         Text(fmtSpeed(speed)).font(.system(size: 14, weight: on ? .bold : .regular)).monospacedDigit()
         if speed == 1 {
-          Text("Normal").font(.system(size: 11)).foregroundStyle(Theme.text3).padding(.top, -6)
+          Text("Normal").font(.system(size: 11)).foregroundStyle(.tertiary).padding(.top, -6)
         }
       }
-      .foregroundStyle(on || hovering ? Color.white : Color(hex: 0xb3b3b3))
+      .foregroundStyle(on || hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
       .frame(minWidth: 60)
       .contentShape(Rectangle())
     }
@@ -706,7 +718,7 @@ private struct EpisodesPanel: View {
         }
         .padding(.vertical, 16)
         .padding(.horizontal, 20)
-        .overlay(alignment: .bottom) { Theme.line.frame(height: 1) }
+        .overlay(alignment: .bottom) { panelLine.frame(height: 1) }
         ScrollViewReader { proxy in
           ScrollView(.vertical) {
             LazyVStack(spacing: 0) {
@@ -745,7 +757,7 @@ private struct PanelEpisodeRow: View {
     let p = app.progress(fid)
     let dur = f?.duration ?? 0
     HStack(spacing: 14) {
-      ArtBox(.file(fid, width: 320), seed: f?.name ?? "", radius: 3, previewing: previewing ? fid : nil) {
+      ArtBox(.file(fid, width: 320), radius: 6, previewing: previewing ? fid : nil) {
         if let p, p.duration != 0 { ProgressEdge(fraction: AppModel.fraction(p)) }
       }
       .frame(width: 120)
@@ -759,13 +771,15 @@ private struct PanelEpisodeRow: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .padding(.vertical, 12)
-    .padding(.horizontal, 20)
-    .frame(height: EpisodesPanel.rowHeight)
-    .background(current ? Color(hex: 0x2e2e2e) : hovering ? Color(hex: 0x333333) : .clear)
+    .padding(.vertical, 6)
+    .padding(.horizontal, 8)
+    .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(current ? 0.12 : hovering ? 0.07 : 0)))
     .overlay(alignment: .leading) {
-      if current { Theme.accent.frame(width: 3) }
+      if current { Capsule().fill(Theme.accent).frame(width: 3, height: 28).offset(x: -6) }
     }
+    .padding(.vertical, 6)
+    .padding(.horizontal, 12)
+    .frame(height: EpisodesPanel.rowHeight)
     .contentShape(Rectangle())
     .onTapGesture(perform: action)
     .hoverPreview(hovering: $hovering, previewing: $previewing)

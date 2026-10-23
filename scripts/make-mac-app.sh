@@ -28,7 +28,7 @@ DEST_DIR="${1:-$HOME/Applications}"
 APP="$DEST_DIR/Nightcap.app"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-TARGET="$(uname -m)-apple-macos14.4"
+TARGET="$(uname -m)-apple-macos26.0"
 
 # ---- The program ------------------------------------------------------------------------------
 
@@ -42,7 +42,7 @@ if ! swiftc -O -swift-version 5 -target "$TARGET" -module-name Nightcap -import-
   cat "$TMP/build.log" >&2
   exit 1
 fi
-# The libraries need a newer macOS than the code does; LSMinimumSystemVersion (below) says so.
+# The libraries may need a newer macOS than the code; LSMinimumSystemVersion (below) takes the newest.
 grep -v "which was built for newer version" "$TMP/build.log" || true
 
 # ---- The bundle -------------------------------------------------------------------------------
@@ -115,7 +115,7 @@ for f in "${FILES[@]}"; do
 done
 
 # Nothing may point outside macOS and the app any more.
-MIN=14.4
+MIN=26.0
 for f in "${FILES[@]}"; do
   left="$(deps "$f" | grep -v '^@rpath/' || true)"
   if [ -n "$left" ]; then
@@ -172,8 +172,8 @@ cat >"$C/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Nightcap</string>
   <key>CFBundleDisplayName</key><string>Nightcap</string>
   <key>CFBundleIdentifier</key><string>local.nightcap.app</string>
-  <key>CFBundleVersion</key><string>4</string>
-  <key>CFBundleShortVersionString</key><string>0.4.0</string>
+  <key>CFBundleVersion</key><string>5</string>
+  <key>CFBundleShortVersionString</key><string>0.5.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>Nightcap</string>
   <key>CFBundleIconFile</key><string>Nightcap</string>

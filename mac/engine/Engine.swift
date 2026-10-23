@@ -150,6 +150,7 @@ final class Engine {
   private(set) var analyzer: Analyzer!
   private(set) var onlineSubs: OnlineSubs!
   private(set) var trickplay: Trickplay!
+  private(set) var stills: Stills!
   private(set) var library: Library
   private var titles: [String: Title] = [:]
   /// Videos opened from outside the library (Finder, File › Open), until the app quits.
@@ -177,8 +178,12 @@ final class Engine {
     trickplay = Trickplay(
       getLibrary: { [unowned self] in self.library }, getLoose: { [unowned self] in self.loose }, media: media,
       isEnabled: { [unowned self] in self.config.data.settings.previews })
+    stills = Stills(trickplay: { [weak self] in self?.trickplay }, markers: { [weak self] in self?.analyzer.markers($0) })
     analyzer.onChange = { [weak self] in self?.onChange?() }
-    trickplay.onChange = { [weak self] in self?.onChange?() }
+    trickplay.onChange = { [weak self] in
+      self?.onChange?()
+      self?.sweepStills()
+    }
   }
 
   private static func byId(_ titles: [Title]) -> [String: Title] {
@@ -209,6 +214,7 @@ final class Engine {
     guard !stopped else { return }
     stopped = true
     periodic?.cancel()
+    stills.stop()
     config.flush()
     progress.flush()
     libraryStore.flush()
@@ -256,6 +262,7 @@ final class Engine {
         logLine("[scan] \(lib.titles.count) titles, \(lib.files.count) videos (\(nowMs() - t0) ms)")
         analyzer.sync()
         trickplay.sync()
+        sweepStills()
         warmProbes()
       } while scanAgain
       scanTask = nil
@@ -654,8 +661,8 @@ final class Engine {
     return path
   }
 
-  /// A picture for a title: its own art, else a frame from an episode.
-  /// `type`: "poster", "backdrop" or "card" (the default).
+  /// A picture for a title: its own art, else the best still of a few of its
+  /// episodes (else a frame from one). `type`: "poster", "backdrop" or "card" (the default).
   func titleArt(_ titleId: String, type: String? = nil, width: Double? = nil) async throws -> String? {
     guard let t = titles[titleId] else { throw EngineError("unknown title", 404) }
     let type = Engine.artTypes.first { $0.jsEquals(type ?? "") } ?? "card"
@@ -666,15 +673,47 @@ final class Engine {
       return nil
     }
     let eps = season.episodes
+    // Four episodes spread over the first season.
+    let n = min(4, eps.count)
+    let sample = (0..<n).compactMap { library.files[eps[$0 * eps.count / n]] }
+    let w = Engine.pickWidth(width)
+    if let best = await stills.best(sample),
+      let pic = await stills.picture(best, shape: StillShape(rawValue: type) ?? .card, width: w)
+    {
+      return pic
+    }
     guard let f = library.files[type == "backdrop" ? eps[eps.count / 2] : eps[0]] else { return nil }
-    return Engine.existing(await media.frameThumb(f, at: type == "backdrop" ? 0.42 : 0.3, width: Engine.pickWidth(width)))
+    return Engine.existing(await media.frameThumb(f, at: type == "backdrop" ? 0.42 : 0.3, width: w))
   }
 
-  /// A picture for a video: its own thumbnail, else a frame 30% in.
+  /// A picture for a video: its own thumbnail, else its still (else a frame 30% in).
   func fileArt(_ fileId: String, width: Double? = nil) async throws -> String? {
     let f = try file(fileId)
     if let thumb = f.thumb { return Engine.existing(thumb) }
-    return Engine.existing(await media.frameThumb(f, at: 0.3, width: Engine.pickWidth(width)))
+    let w = Engine.pickWidth(width)
+    if let pic = await stills.picture(f, shape: .card, width: w) { return pic }
+    return Engine.existing(await media.frameThumb(f, at: 0.3, width: w))
+  }
+
+  /// Chooses missing stills in the background, newest titles first (see `Stills.sweep`).
+  private func sweepStills() {
+    guard !stopped else { return }
+    stills.sweep { [weak self] in
+      guard let self else { return [] }
+      return self.trickplay.wanted().compactMap { self.library.files[$0] }
+    }
+  }
+
+  /// The frame of a video at `t` seconds, 16:9.
+  func momentArt(_ fileId: String, at t: Double, width: Double? = nil) async throws -> String? {
+    let f = try file(fileId)
+    guard t.isFinite, t >= 0 else { throw EngineError("bad time", 400) }
+    return await stills.moment(f, at: t, width: Engine.pickWidth(width))
+  }
+
+  /// Good moments to start a video from, spread over it (empty until its previews are made).
+  func sceneTimes(_ fileId: String, count: Int) async throws -> [Double] {
+    await stills.moments(try file(fileId), count: count)
   }
 
   // ---- Intro and credits ----------------------------------------------------------------

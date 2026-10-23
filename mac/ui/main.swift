@@ -180,21 +180,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
   }
 
   @objc func showSettings(_ sender: Any?) {
-    let c = controller(NSApp.keyWindow) ?? controllers.first ?? openWindow()
+    if let c = controller(NSApp.keyWindow) {
+      c.model.openSettings()
+    } else {
+      SettingsWindowController.show(app: app, tab: nil)
+    }
+  }
+
+  @objc func addFolder(_ sender: Any?) {
+    let c = frontController() ?? openWindow()
     c.window.makeKeyAndOrderFront(nil)
-    c.model.go(.settings)
+    c.model.addFolder()
   }
 
   @objc func find(_ sender: Any?) {
     controller(NSApp.keyWindow)?.model.focusSearch()
   }
 
+  @objc func goBack(_ sender: Any?) {
+    controller(NSApp.keyWindow)?.model.goBack()
+  }
+
+  @objc func goForward(_ sender: Any?) {
+    controller(NSApp.keyWindow)?.model.goForward()
+  }
+
+  @objc func toggleLibrarySidebar(_ sender: Any?) {
+    controller(NSApp.keyWindow)?.model.toggleSidebar()
+  }
+
   func validateMenuItem(_ item: NSMenuItem) -> Bool {
-    if item.action == #selector(find(_:)) {
-      guard let c = controller(NSApp.keyWindow) else { return false }
-      return c.model.player == nil
+    let c = controller(NSApp.keyWindow)
+    // Pages only: the player keeps its own keys.
+    let page = c.map { $0.model.player == nil } ?? false
+    switch item.action {
+    case #selector(find(_:)): return page
+    case #selector(goBack(_:)): return page && c!.model.canGoBack
+    case #selector(goForward(_:)): return page && c!.model.canGoForward
+    case #selector(toggleLibrarySidebar(_:)):
+      item.title = c?.model.sidebarHidden == true ? "Show Sidebar" : "Hide Sidebar"
+      return page
+    default: return true
     }
-    return true
   }
 
   // ---- Keys and the mouse ---------------------------------------------------------------------------
@@ -256,6 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let file = NSMenu(title: "File")
     file.addItem(item("New Window", #selector(newWindow(_:)), "n"))
     file.addItem(item("Open…", #selector(openVideosPanel(_:)), "o"))
+    file.addItem(item("Add Folder to Library…", #selector(addFolder(_:)), "o", [.command, .shift]))
     file.addItem(.separator())
     file.addItem(item("Close Window", #selector(NSWindow.performClose(_:)), "w"))
     let edit = NSMenu(title: "Edit")
@@ -269,6 +297,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     edit.addItem(.separator())
     edit.addItem(item("Find", #selector(find(_:)), "f"))
     let view = NSMenu(title: "View")
+    view.addItem(item("Back", #selector(goBack(_:)), "["))
+    view.addItem(item("Forward", #selector(goForward(_:)), "]"))
+    view.addItem(.separator())
+    view.addItem(item("Hide Sidebar", #selector(toggleLibrarySidebar(_:)), "s", [.command, .control]))
+    view.addItem(.separator())
     view.addItem(item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]))
     let window = NSMenu(title: "Window")
     window.addItem(item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"))

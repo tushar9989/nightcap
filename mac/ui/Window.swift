@@ -2,21 +2,21 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-// A window: the sidebar, the page it shows, and the player over them.
+// A window: the sidebar, the page it shows, the toolbar (back, forward,
+// search), and the player over all of them.
 
 enum Route: Equatable {
-  case home, shows, movies, settings
+  case home, shows, movies
   case search(String)
-  /// A show or film; `season` is the tab chosen on its page.
+  /// A show or film; `season` is the one chosen on its page.
   case title(String, season: Int?)
 
-  /// Which page is showing (the sidebar marks it).
+  /// Which page is showing.
   var key: String {
     switch self {
     case .home: "home"
     case .shows: "shows"
     case .movies: "movies"
-    case .settings: "settings"
     case .search: "search"
     case .title(let id, _): "title:\(id)"
     }
@@ -40,15 +40,23 @@ final class WindowModel {
   @ObservationIgnored weak var window: NSWindow?
 
   private(set) var route: Route = .home
+  /// Pages to go back and forward to.
+  private(set) var back: [Route] = []
+  private(set) var forward: [Route] = []
   private(set) var searchText = ""
   /// The search field has the keyboard (kept in step by the view).
   var searchFocused = false
   /// Bumped to move the keyboard into the search field, or out of it.
   private(set) var focusSearchToken = 0
   private(set) var blurSearchToken = 0
+  /// The sidebar list a title was last chosen from (0 Watching, 1 Shows or Movies),
+  /// so the row clicked stays selected when a title is in both.
+  var sideList = 1
   private(set) var player: PlayerModel?
   private(set) var toast: Toast?
   private(set) var isFullScreen = false
+  /// Sidebar shown or hidden (the toolbar button, View › Hide Sidebar).
+  var columns = NavigationSplitViewVisibility.automatic
 
   init(app: AppModel) {
     self.app = app
@@ -56,40 +64,77 @@ final class WindowModel {
 
   // ---- Pages ------------------------------------------------------------------------
 
-  func go(_ to: Route) { navigate(to, typing: false) }
+  var canGoBack: Bool { !back.isEmpty }
+  var canGoForward: Bool { !forward.isEmpty }
 
-  private func navigate(_ to: Route, typing: Bool) {
-    var r = to
-    if case .search(let q) = r, q.jsTrimmed.isEmpty { r = .home }
+  func go(_ to: Route) {
     if player != nil { closePlayer() }
-    if r != route { route = r }
-    // On the pages a click anywhere took the keyboard from the search field;
-    // here buttons don't, so going somewhere other than by typing does.
-    if !typing && searchFocused { blurSearchToken += 1 }
-    if r.key != "search" && (!typing || !searchFocused) && !searchText.isEmpty { searchText = "" }
+    // Going somewhere other than by typing leaves the search.
+    if searchFocused { blurSearchToken += 1 }
+    if case .search(let q) = to { searchText = q } else if !searchText.isEmpty { searchText = "" }
+    sideList = 1
+    visit(to)
   }
 
-  /// The season tab chosen on a title page.
+  /// Shows `to`, remembering the page it leaves for Back.
+  private func visit(_ to: Route) {
+    guard to != route else { return }
+    back.append(route)
+    if back.count > 100 { back.removeFirst() }
+    forward = []
+    route = to
+  }
+
+  func goBack() {
+    guard let to = back.popLast() else { return }
+    if player != nil { closePlayer() }
+    forward.append(route)
+    show(to)
+  }
+
+  func goForward() {
+    guard let to = forward.popLast() else { return }
+    if player != nil { closePlayer() }
+    back.append(route)
+    show(to)
+  }
+
+  /// Back or forward: the page, with the search it had.
+  private func show(_ to: Route) {
+    if case .search(let q) = to { searchText = q } else if !searchText.isEmpty { searchText = "" }
+    route = to
+  }
+
+  /// The season chosen on a title page (not a step for Back).
   func setSeason(_ i: Int) {
     if case .title(let id, let s) = route, s != i { route = .title(id, season: i) }
   }
 
   func typeSearch(_ q: String) {
     // The field also hands back the text it already has (when it gains or
-    // loses the keyboard, say): only an edit searches, as the pages' input event did.
+    // loses the keyboard, say): only an edit searches.
     guard q != searchText else { return }
     searchText = q
-    navigate(q.jsTrimmed.isEmpty ? .home : .search(q), typing: true)
-  }
-
-  /// Esc in the search field.
-  func leaveSearch() {
-    searchText = ""
-    blurSearchToken += 1
-    go(.home)
+    if player != nil { closePlayer() }
+    let searching: Bool
+    if case .search = route { searching = true } else { searching = false }
+    if q.jsTrimmed.isEmpty {
+      // Emptied: back to the page the search started from.
+      if searching { route = back.popLast() ?? .home }
+    } else if searching {
+      route = .search(q)
+    } else {
+      visit(.search(q))
+    }
   }
 
   func focusSearch() { focusSearchToken += 1 }
+
+  var sidebarHidden: Bool { columns == .detailOnly }
+
+  func toggleSidebar() {
+    withAnimation { columns = sidebarHidden ? .all : .detailOnly }
+  }
 
   // ---- Player ---------------------------------------------------------------------------
 
@@ -98,9 +143,15 @@ final class WindowModel {
     if let p = player {
       p.open(fid, start: start)
     } else {
+      if searchFocused { blurSearchToken += 1 }
       let p = PlayerModel(app: app, win: self)
       player = p
       p.open(fid, start: start)
+      // The player covers the window; the toolbar would float over it.
+      Task { @MainActor [weak self] in
+        try? await Task.sleep(nanoseconds: 180_000_000)
+        if let self, self.player != nil { self.window?.toolbar?.isVisible = false }
+      }
     }
     updateTitle()
   }
@@ -109,6 +160,7 @@ final class WindowModel {
     guard let p = player else { return }
     p.close()
     player = nil
+    window?.toolbar?.isVisible = true
     updateTitle()
   }
 
@@ -135,32 +187,32 @@ final class WindowModel {
 
   // ---- Folders ------------------------------------------------------------------------------
 
-  static let folderKinds: [(kind: String, label: String)] = [("auto", "Auto-detect"), ("shows", "TV shows"), ("movies", "Movies")]
-
-  /// The Mac's folder chooser, with what the folder contains.
+  /// The Mac's folder chooser; the folder is added and scanned.
   func addFolder() {
-    guard let window, window.attachedSheet == nil else { return }
-    let panel = NSOpenPanel()
-    panel.canChooseDirectories = true
-    panel.canChooseFiles = false
-    panel.allowsMultipleSelection = false
-    panel.canCreateDirectories = false
-    panel.prompt = "Add Folder"
-    panel.message = "Choose a folder with films or shows. Each subfolder of a show becomes a season."
-    let popup = NSPopUpButton(frame: .zero, pullsDown: false)
-    popup.addItems(withTitles: WindowModel.folderKinds.map(\.label))
-    let label = NSTextField(labelWithString: "Contains:")
-    let row = NSStackView(views: [label, popup])
-    row.orientation = .horizontal
-    row.spacing = 8
-    row.edgeInsets = NSEdgeInsets(top: 10, left: 16, bottom: 10, right: 16)
-    panel.accessoryView = row
-    panel.isAccessoryViewDisclosed = true
-    panel.beginSheetModal(for: window) { [weak self] response in
-      guard response == .OK, let url = panel.url else { return }
-      let kind = WindowModel.folderKinds[max(0, popup.indexOfSelectedItem)].kind
-      Task { @MainActor in await self?.add(url.path, kind: kind) }
+    guard let window else { return }
+    chooseFolder(for: window) { [weak self] path, kind in
+      Task { @MainActor in await self?.add(path, kind: kind) }
     }
+  }
+
+  private func add(_ path: String, kind: String) async {
+    toast("Adding and scanning…", ms: 120_000)
+    do {
+      try await app.addFolder(path, kind: kind)
+      toast("Folder added")
+      go(.home)
+    } catch {
+      toast(errorText(error), ms: 5000)
+    }
+  }
+
+  /// The Settings window. What plays here pauses while it is in front.
+  func openSettings(_ tab: SettingsTab? = nil) {
+    if let p = player {
+      p.closePanel()
+      p.pause()
+    }
+    SettingsWindowController.show(app: app, tab: tab)
   }
 
   // ---- Videos from outside the library --------------------------------------------------------
@@ -206,17 +258,6 @@ final class WindowModel {
     }
   }
 
-  private func add(_ path: String, kind: String) async {
-    toast("Adding and scanning…", ms: 120_000)
-    do {
-      app.apply(try await app.engine.addFolder(path, kind: kind))
-      toast("Folder added")
-      if route != .settings { go(.home) }
-    } catch {
-      toast(errorText(error), ms: 5000)
-    }
-  }
-
   // ---- Keys -------------------------------------------------------------------------------
 
   /// A key pressed in this window; true if it was used.
@@ -258,18 +299,33 @@ final class WindowModel {
   }
 }
 
-// ---- The window's view -------------------------------------------------------------------------
-
-private struct MetricsKey: EnvironmentKey {
-  static let defaultValue = Metrics(width: 1200)
-}
-
-extension EnvironmentValues {
-  var metrics: Metrics {
-    get { self[MetricsKey.self] }
-    set { self[MetricsKey.self] = newValue }
+/// The Mac's folder chooser, with what the folder contains: `done(path, kind)`.
+@MainActor
+func chooseFolder(for window: NSWindow, done: @escaping (String, String) -> Void) {
+  guard window.attachedSheet == nil else { return }
+  let panel = NSOpenPanel()
+  panel.canChooseDirectories = true
+  panel.canChooseFiles = false
+  panel.allowsMultipleSelection = false
+  panel.canCreateDirectories = false
+  panel.prompt = "Add Folder"
+  panel.message = "Choose a folder with films or shows. Each subfolder of a show becomes a season."
+  let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+  popup.addItems(withTitles: AppModel.folderKinds.map(\.label))
+  let label = NSTextField(labelWithString: "Contains:")
+  let row = NSStackView(views: [label, popup])
+  row.orientation = .horizontal
+  row.spacing = 8
+  row.edgeInsets = NSEdgeInsets(top: 10, left: 16, bottom: 10, right: 16)
+  panel.accessoryView = row
+  panel.isAccessoryViewDisclosed = true
+  panel.beginSheetModal(for: window) { response in
+    guard response == .OK, let url = panel.url else { return }
+    done(url.path, AppModel.folderKinds[max(0, popup.indexOfSelectedItem)].kind)
   }
 }
+
+// ---- The window's view -------------------------------------------------------------------------
 
 struct WindowRoot: View {
   @Environment(AppModel.self) private var app
@@ -277,34 +333,34 @@ struct WindowRoot: View {
   @FocusState private var searchFocused: Bool
 
   var body: some View {
-    // Only a reader inside the safe area sees the title bar's height (one that
-    // ignores the safe area is told 0); the window's content fills the whole window.
-    GeometryReader { safe in
-      let top = safe.safeAreaInsets.top
-      GeometryReader { geo in
-        let m = Metrics(width: geo.size.width)
-        ZStack(alignment: .topLeading) {
-          HStack(spacing: 0) {
-            Sidebar(topInset: top, searchFocused: $searchFocused)
-              .frame(width: m.sideWidth)
-            PageHost()
-              .padding(.top, top)
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
-          }
-          if let p = win.player {
-            PlayerView(player: p, topInset: top)
-              .transition(.opacity)
-          }
-          ToastView(offset: win.player == nil ? m.sideWidth / 2 : 0)
-        }
-        .environment(\.metrics, m)
-        .frame(width: geo.size.width, height: geo.size.height)
-      }
-      .ignoresSafeArea()
+    @Bindable var win = win
+    let search = Binding(get: { win.searchText }, set: { win.typeSearch($0) })
+    NavigationSplitView(columnVisibility: $win.columns) {
+      Sidebar()
+        .navigationSplitViewColumnWidth(min: 190, ideal: 236, max: 340)
+    } detail: {
+      PageHost()
     }
-    .background(Theme.bg)
-    .foregroundStyle(Theme.text)
-    .preferredColorScheme(.dark)
+    .searchable(text: search, placement: .toolbar, prompt: "Titles and episodes")
+    .searchFocused($searchFocused)
+    .toolbar {
+      ToolbarItemGroup(placement: .navigation) {
+        Button { win.goBack() } label: { Label("Back", systemImage: "chevron.left") }
+          .disabled(!win.canGoBack)
+          .help("Back")
+        Button { win.goForward() } label: { Label("Forward", systemImage: "chevron.right") }
+          .disabled(!win.canGoForward)
+          .help("Forward")
+      }
+    }
+    .overlay {
+      if let p = win.player {
+        PlayerView(player: p, fullScreen: win.isFullScreen)
+          .ignoresSafeArea()
+          .transition(.opacity)
+      }
+    }
+    .overlay { ToastView().ignoresSafeArea() }
     .animation(.easeOut(duration: 0.2), value: win.player == nil)
     .onChange(of: searchFocused) { _, focused in win.searchFocused = focused }
     .onChange(of: win.focusSearchToken) { searchFocused = true }
@@ -315,6 +371,7 @@ struct WindowRoot: View {
 /// The page the route names.
 private struct PageHost: View {
   @Environment(WindowModel.self) private var win
+  @State private var width: CGFloat = 1000
 
   var body: some View {
     let route = win.route
@@ -325,43 +382,44 @@ private struct PageHost: View {
       case .movies: GridPage(shows: false)
       case .search(let q): SearchPage(query: q)
       case .title(let id, let season): TitlePage(titleId: id, season: season)
-      case .settings: SettingsPage()
       }
     }
     .id(pageId(route))
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .environment(\.metrics, Metrics(width: width))
+    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
   }
 
-  /// A new page (scrolled to the top) for each title or search; not for a season tab.
+  /// A new page (scrolled to the top) for each title or search; not for a season.
   private func pageId(_ r: Route) -> String {
     if case .search(let q) = r { return "search:\(q)" }
     return r.key
   }
 }
 
+/// At the bottom of a page; in the player, at the top under the title, clear of the
+/// bar, the subtitles and the cards.
 private struct ToastView: View {
   @Environment(WindowModel.self) private var win
-  var offset: CGFloat
 
   var body: some View {
+    let top = win.player != nil
     VStack {
-      Spacer()
       if let t = win.toast {
         Text(t.text)
-          .font(.system(size: 13.5, weight: .semibold))
-          .foregroundStyle(Color(hex: 0x111111))
+          .font(.callout.weight(.medium))
           .multilineTextAlignment(.center)
-          .padding(.vertical, 9)
-          .padding(.horizontal, 16)
-          .background(RoundedRectangle(cornerRadius: 9).fill(Color(hex: 0xf2f2f4)))
-          .shadow(color: .black.opacity(0.35), radius: 12, y: 8)
+          .padding(.vertical, 10)
+          .padding(.horizontal, 18)
+          .glassEffect(.regular, in: .capsule)
           .frame(maxWidth: 640)
-          .transition(.opacity.combined(with: .offset(y: 20)))
+          .id(t.id)
+          .transition(.opacity.combined(with: .offset(y: top ? -16 : 16)))
       }
     }
-    .padding(.bottom, 28)
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .offset(x: offset)
-    .animation(.easeOut(duration: 0.25), value: win.toast == nil)
+    .padding(top ? .top : .bottom, top ? (win.isFullScreen ? 16 : 40) + 56 : 28)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: top ? .top : .bottom)
+    .animation(.easeOut(duration: 0.25), value: win.toast)
     .allowsHitTesting(false)
   }
 }
@@ -370,6 +428,9 @@ private struct ToastView: View {
 
 @MainActor
 final class WindowController: NSObject, NSWindowDelegate {
+  /// Test builds draw windows as active even when the app isn't (pictures of the screen).
+  static var drawActive = false
+
   let window: NSWindow
   let model: WindowModel
   var onClose: ((WindowController) -> Void)?
@@ -384,10 +445,8 @@ final class WindowController: NSObject, NSWindowDelegate {
     super.init()
     window.title = "Nightcap"
     window.titleVisibility = .hidden
-    window.titlebarAppearsTransparent = true
-    window.backgroundColor = Theme.nsBackground
-    window.appearance = NSAppearance(named: .darkAqua)
-    window.minSize = NSSize(width: 720, height: 480)
+    window.toolbarStyle = .unified
+    window.minSize = NSSize(width: 760, height: 500)
     window.isReleasedWhenClosed = false
     window.isRestorable = false
     window.tabbingMode = .disallowed
@@ -397,9 +456,13 @@ final class WindowController: NSObject, NSWindowDelegate {
     window.delegate = self
     model.window = window
 
-    let host = NSHostingView(rootView: WindowRoot().environment(app).environment(model))
+    let root = WindowRoot().environment(app).environment(model).activeLook(WindowController.drawActive)
+    let host = NSHostingController(rootView: root)
+    // The toolbar and search field come from the SwiftUI views.
+    host.sceneBridgingOptions = [.toolbars]
     host.sizingOptions = []
-    window.contentView = host
+    window.contentViewController = host
+    window.setContentSize(size)
 
     if let front {
       window.setFrame(front.frame, display: false)
@@ -413,8 +476,8 @@ final class WindowController: NSObject, NSWindowDelegate {
 
   func show() {
     window.makeKeyAndOrderFront(nil)
-    // AppKit gives the first text field, the search, the keyboard; the pages
-    // started without it ("/" or ⌘F moves there).
+    // AppKit gives the search field the keyboard; the window starts without it
+    // ("/" or ⌘F moves there).
     window.makeFirstResponder(nil)
   }
 
@@ -425,4 +488,11 @@ final class WindowController: NSObject, NSWindowDelegate {
 
   func windowDidEnterFullScreen(_ note: Notification) { model.fullScreenChanged(true) }
   func windowDidExitFullScreen(_ note: Notification) { model.fullScreenChanged(false) }
+}
+
+extension View {
+  /// Draws as in the active window (test pictures only; see `WindowController.drawActive`).
+  @ViewBuilder func activeLook(_ on: Bool) -> some View {
+    if on { environment(\.controlActiveState, .key) } else { self }
+  }
 }

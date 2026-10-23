@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 
 // What the player shows over the window: the picture, subtitles, the controls
-// (hidden after 3 s of playing untouched), Skip Intro, the Next Episode card,
-// the card above the Next button, and the panels (PlayerPanels.swift). Sizes
-// follow the player section of the pages' styles.
+// on a bar of glass (hidden after 3 s of playing untouched), Skip Intro, the
+// Next Episode card, the card above the Next button, and the panels
+// (PlayerPanels.swift). Always dark, whatever the Mac's appearance.
 
 /// The picture. A click plays or pauses (two: full screen).
 final class PlayerSurface: VideoView {
@@ -26,7 +26,7 @@ private struct SurfaceHost: NSViewRepresentable {
 }
 
 extension AnyTransition {
-  /// The pages' `rise`: up a little, from transparent.
+  /// Up a little, from transparent.
   static var rise: AnyTransition {
     .opacity.combined(with: .offset(y: 16)).combined(with: .scale(scale: 0.98))
   }
@@ -40,9 +40,21 @@ private struct NextButtonKey: PreferenceKey {
   }
 }
 
+/// The glass of the player's bar, cards and panels: tinted a little darker, so
+/// text stays readable over a bright picture.
+let playerGlass = Glass.regular.tint(.black.opacity(0.3))
+
+/// How far the bar keeps from the window's edges, and how tall it is.
+enum PlayerMetrics {
+  static let margin: CGFloat = 20
+  static let barHeight: CGFloat = 92
+  /// Above the bar: Skip Intro, the cards and the panels.
+  static let aboveBar: CGFloat = margin + barHeight + 14
+}
+
 struct PlayerView: View {
   let player: PlayerModel
-  let topInset: CGFloat
+  let fullScreen: Bool
 
   var body: some View {
     GeometryReader { g in
@@ -51,7 +63,7 @@ struct PlayerView: View {
         SurfaceHost(surface: player.surface)
         SubtitlesLayer(clock: player.clock, idle: player.idle, size: size)
         CenterLayer(sign: player.center)
-        ControlsLayer(player: player, topInset: topInset)
+        ControlsLayer(player: player, fullScreen: fullScreen)
         if let failure = player.failure {
           ErrorLayer(player: player, failure: failure)
         }
@@ -63,7 +75,8 @@ struct PlayerView: View {
       }
     }
     .background(Color.black)
-    .foregroundStyle(.white)
+    .foregroundStyle(.primary)
+    .environment(\.colorScheme, .dark)
   }
 }
 
@@ -102,7 +115,7 @@ private struct SubtitlesLayer: View {
       }
     }
     .padding(.horizontal, size.width * 0.06)
-    .padding(.bottom, (idle ? size.height * 0.07 : 150) + leading / 2)
+    .padding(.bottom, (idle ? size.height * 0.07 : PlayerMetrics.aboveBar + 10) + leading / 2)
     .frame(width: size.width, height: size.height)
     .animation(.easeOut(duration: 0.3), value: idle)
     .allowsHitTesting(false)
@@ -146,9 +159,9 @@ private struct FlashSign: View {
   @State private var done = false
 
   var body: some View {
-    Circle().fill(Color.black.opacity(0.5))
+    Circle().fill(Color.black.opacity(0.45))
       .frame(width: 84, height: 84)
-      .overlay { Image(systemName: icon).font(.system(size: 36)).foregroundStyle(.white) }
+      .overlay { Image(systemName: icon).font(.system(size: 34)).foregroundStyle(.white) }
       .scaleEffect(done ? 1.3 : 0.8)
       .opacity(done ? 0 : 1)
       .onAppear {
@@ -161,11 +174,11 @@ private struct FlashSign: View {
 
 private struct ControlsLayer: View {
   let player: PlayerModel
-  let topInset: CGFloat
+  let fullScreen: Bool
 
   var body: some View {
     VStack(spacing: 0) {
-      TopBar(player: player, topInset: topInset)
+      TopBar(player: player, fullScreen: fullScreen)
       Spacer(minLength: 0)
       BottomBar(player: player)
     }
@@ -177,18 +190,26 @@ private struct ControlsLayer: View {
 
 private struct TopBar: View {
   let player: PlayerModel
-  let topInset: CGFloat
+  let fullScreen: Bool
   @Environment(AppModel.self) private var app
 
   var body: some View {
-    HStack(spacing: 18) {
-      PlayerButton(icon: "arrow.left", help: "Back (Esc)") { player.exit() }
+    HStack(spacing: 12) {
+      Button { player.exit() } label: {
+        Image(systemName: "chevron.left")
+          .font(.system(size: 16, weight: .semibold))
+          .frame(width: 24, height: 24)
+      }
+      .buttonStyle(.glass)
+      .buttonBorderShape(.circle)
+      .controlSize(.large)
+      .help("Back (Esc)")
       title
       Spacer(minLength: 0)
     }
     // Below the window's close / minimise / zoom buttons.
-    .padding(EdgeInsets(top: max(22, topInset + 6), leading: 28, bottom: 60, trailing: 28))
-    .background(LinearGradient(colors: [.black.opacity(0.7), .clear], startPoint: .top, endPoint: .bottom))
+    .padding(EdgeInsets(top: fullScreen ? 16 : 40, leading: PlayerMetrics.margin, bottom: 36, trailing: PlayerMetrics.margin))
+    .background(LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom))
     .contentShape(Rectangle())
     .onHover { player.hoveringControls = $0 }
   }
@@ -197,15 +218,14 @@ private struct TopBar: View {
     if let fid = player.fid {
       let f = app.file(fid)
       let t = player.title
-      HStack(spacing: 10) {
-        Text(t?.name ?? f?.name ?? "").fontWeight(.bold)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(t?.name ?? f?.name ?? "").font(.headline)
         if t?.isShow == true {
-          Text("\(app.epCode(fid))  \(f?.name ?? "")").foregroundStyle(Color(hex: 0xcccccc))
+          Text("\(app.epCode(fid)) · \(f?.name ?? "")").font(.subheadline).foregroundStyle(.secondary)
         }
       }
-      .font(.system(size: 17))
       .lineLimit(1)
-      .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
+      .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
     }
   }
 }
@@ -214,18 +234,26 @@ private struct BottomBar: View {
   let player: PlayerModel
 
   var body: some View {
-    VStack(spacing: 6) {
-      ScrubBar(player: player)
-      ControlsRow(player: player)
+    GlassEffectContainer {
+      VStack(spacing: 2) {
+        HStack(spacing: 12) {
+          ElapsedLabel(clock: player.clock, player: player)
+          ScrubBar(player: player)
+          RemainingLabel(clock: player.clock, player: player)
+        }
+        ControlsRow(player: player)
+      }
+      .padding(EdgeInsets(top: 10, leading: 16, bottom: 8, trailing: 16))
+      .frame(height: PlayerMetrics.barHeight)
+      .glassEffect(playerGlass, in: .rect(cornerRadius: 26))
     }
-    .padding(EdgeInsets(top: 70, leading: 28, bottom: 18, trailing: 28))
-    .background(LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom))
-    .contentShape(Rectangle())
+    .padding(.horizontal, PlayerMetrics.margin)
+    .padding(.bottom, PlayerMetrics.margin)
     .onHover { player.hoveringControls = $0 }
   }
 }
 
-/// The round buttons of the controls; they grow under the pointer.
+/// The buttons of the bar: a symbol, lit by a soft circle under the pointer.
 private struct PlayerButton: View {
   let icon: String
   var small = false
@@ -237,13 +265,12 @@ private struct PlayerButton: View {
   var body: some View {
     Button(action: action) {
       Image(systemName: icon)
-        .font(.system(size: small ? 20 : 23, weight: .medium))
-        .frame(width: 46, height: 46)
+        .font(.system(size: small ? 17 : 20, weight: .medium))
+        .frame(width: 40, height: 40)
+        .background(Circle().fill(Color.white.opacity(hovering ? 0.14 : 0)))
         .contentShape(Circle())
     }
-    .buttonStyle(PlainTapStyle())
-    .foregroundStyle(.white)
-    .scaleEffect(hovering ? 1.18 : 1)
+    .buttonStyle(PressStyle())
     .animation(.easeOut(duration: 0.15), value: hovering)
     .onHover { inside in
       hovering = inside
@@ -253,7 +280,43 @@ private struct PlayerButton: View {
   }
 }
 
+/// Dims a chromeless button while it is pressed.
+struct PressStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label.opacity(configuration.isPressed ? 0.6 : 1)
+  }
+}
+
 // ---- The seek bar -------------------------------------------------------------------------------------
+
+private struct ElapsedLabel: View {
+  let clock: PlayerClock
+  let player: PlayerModel
+
+  var body: some View {
+    Text(fmtTime(player.dragging ? player.dragTime : clock.time))
+      .font(.callout)
+      .monospacedDigit()
+      .foregroundStyle(.secondary)
+      .frame(minWidth: 44, alignment: .leading)
+  }
+}
+
+private struct RemainingLabel: View {
+  let clock: PlayerClock
+  let player: PlayerModel
+
+  var body: some View {
+    let dur = player.duration
+    let t = player.dragging ? player.dragTime : clock.time
+    Text(dur > 0 ? "-\(fmtTime(max(0, dur - t)))" : "")
+      .font(.callout)
+      .monospacedDigit()
+      .foregroundStyle(.secondary)
+      .frame(minWidth: 44, alignment: .trailing)
+      .help("\(fmtTime(t)) of \(fmtTime(dur))")
+  }
+}
 
 private struct ScrubBar: View {
   let player: PlayerModel
@@ -270,11 +333,12 @@ private struct ScrubBar: View {
       let lit = hovering || player.dragging
       ZStack(alignment: .leading) {
         ZStack(alignment: .leading) {
-          Color.white.opacity(0.25)
+          Color.white.opacity(0.22)
           if dur > 0 { segments(width: w, duration: dur) }
           ScrubFill(player: player, width: w, knob: nil)
         }
-        .frame(height: lit ? 7 : 4)
+        .frame(height: lit ? 8 : 5)
+        .clipShape(Capsule())
         ScrubFill(player: player, width: w, knob: lit)
       }
       .frame(width: w, height: 22)
@@ -316,13 +380,13 @@ private struct ScrubBar: View {
   @ViewBuilder private func segments(width w: CGFloat, duration dur: Double) -> some View {
     let m = player.markers
     if let intro = m.intro {
-      Color(red: 130 / 255, green: 200 / 255, blue: 1, opacity: 0.55)
+      Color(red: 130 / 255, green: 200 / 255, blue: 1, opacity: 0.5)
         .frame(width: max(0, w * CGFloat((intro.end - intro.start) / dur)))
         .offset(x: w * CGFloat(intro.start / dur))
         .help("Intro")
     }
     if let credits = m.credits {
-      Color(red: 190 / 255, green: 150 / 255, blue: 1, opacity: 0.55)
+      Color(red: 190 / 255, green: 150 / 255, blue: 1, opacity: 0.5)
         .frame(width: max(0, w * CGFloat((dur - credits.start) / dur)))
         .offset(x: w * CGFloat(credits.start / dur))
         .help("Credits")
@@ -337,9 +401,9 @@ private struct ScrubBar: View {
       m.intro.map { t >= $0.start && t < $0.end } == true
       ? " · Intro" : m.credits.map { t >= $0.start } == true ? " · Credits" : ""
     let trick = player.trick
-    let half: CGFloat = trick != nil ? ScrubBar.thumbWidth / 2 + 4 : 30
+    let half: CGFloat = trick != nil ? ScrubBar.thumbWidth / 2 + 5 : 34
     let x = max(half, min(w - half, pointerX))
-    VStack(spacing: 4) {
+    VStack(spacing: 5) {
       if let trick {
         let h = (trick.height * Double(ScrubBar.thumbWidth) / trick.width).rounded()
         ZStack {
@@ -349,21 +413,18 @@ private struct ScrubBar: View {
           }
         }
         .frame(width: ScrubBar.thumbWidth, height: CGFloat(h))
-        .clipShape(RoundedRectangle(cornerRadius: 3))
-        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.15), lineWidth: 1))
-        .padding(.horizontal, -4)
-        .padding(.top, 1)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
       }
-      Text(fmtTime(t) + place).font(.system(size: 13)).monospacedDigit()
+      Text(fmtTime(t) + place).font(.callout.weight(.medium)).monospacedDigit()
     }
-    .padding(.vertical, 3)
-    .padding(.horizontal, 8)
-    .background(RoundedRectangle(cornerRadius: 4).fill(Color(red: 20 / 255, green: 20 / 255, blue: 20 / 255).opacity(0.9)))
+    .padding(EdgeInsets(top: trick != nil ? 5 : 4, leading: trick != nil ? 5 : 10, bottom: 5, trailing: trick != nil ? 5 : 10))
+    .background(RoundedRectangle(cornerRadius: trick != nil ? 13 : 9).fill(Color.black.opacity(0.82)))
+    .overlay(RoundedRectangle(cornerRadius: trick != nil ? 13 : 9).strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
     .fixedSize()
-    // Centred on x, just above the bar: a zero-size frame there, which the tip
+    // Centred on x, above the bar: a zero-size frame there, which the tip
     // overflows upwards. (An overlay ignores the alignment guides of `if` content.)
     .frame(width: 0, height: 0, alignment: .bottom)
-    .offset(x: x)
+    .offset(x: x, y: -14)
     .allowsHitTesting(false)
   }
 }
@@ -380,7 +441,8 @@ private struct ScrubFill: View {
     let t = player.dragging ? player.dragTime : player.clock.time
     let x = dur > 0 ? width * CGFloat(max(0, min(1, t / dur))) : 0
     if let knob {
-      Circle().fill(Theme.accent).frame(width: 16, height: 16)
+      Circle().fill(Color.white).frame(width: 16, height: 16)
+        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
         .scaleEffect(knob ? 1 : 0)
         .offset(x: x - 8)
     } else {
@@ -397,19 +459,18 @@ private struct ControlsRow: View {
   @Environment(WindowModel.self) private var win
 
   var body: some View {
-    HStack(spacing: 10) {
+    HStack(spacing: 2) {
       PlayerButton(icon: player.playing ? "pause.fill" : "play.fill", help: "Play / pause (Space)") { player.togglePlay() }
       PlayerButton(icon: "gobackward.10", help: "Back 10 s (←)") { player.seek(player.time - 10) }
       PlayerButton(icon: "goforward.10", help: "Forward 10 s (→)") { player.seek(player.time + 10) }
       VolumeControl(player: player)
       Text(midTitle)
-        .font(.system(size: 15))
-        .foregroundStyle(Color(hex: 0xdddddd))
+        .font(.callout)
+        .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.tail)
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)
-      TimeLabel(player: player)
       if player.nextId != nil {
         PlayerButton(icon: "forward.end.fill", small: true, help: "Next episode (N)", onHover: { player.buttonHover(.next, $0) }) {
           player.buttonClick(.next)
@@ -417,7 +478,7 @@ private struct ControlsRow: View {
         .anchorPreference(key: NextButtonKey.self, value: .bounds) { $0 }
       }
       if showsEpisodes {
-        PlayerButton(icon: "play.rectangle.on.rectangle.fill", small: true, help: "Episodes", onHover: { player.buttonHover(.episodes, $0) }) {
+        PlayerButton(icon: "rectangle.stack.fill", small: true, help: "Episodes", onHover: { player.buttonHover(.episodes, $0) }) {
           player.buttonClick(.episodes)
         }
       }
@@ -450,21 +511,6 @@ private struct ControlsRow: View {
   }
 }
 
-private struct TimeLabel: View {
-  let player: PlayerModel
-
-  var body: some View {
-    let t = player.clock.time
-    let dur = player.duration
-    Text(dur > 0 ? "-\(fmtTime(dur - t))" : fmtTime(t))
-      .font(.system(size: 14))
-      .monospacedDigit()
-      .foregroundStyle(Color(hex: 0xdddddd))
-      .frame(minWidth: 54, alignment: .trailing)
-      .help("\(fmtTime(t)) / \(fmtTime(dur))")
-  }
-}
-
 /// Mute, and the volume (up to 200%) with its level, shown under the pointer.
 private struct VolumeControl: View {
   let player: PlayerModel
@@ -479,11 +525,11 @@ private struct VolumeControl: View {
       VolumeSlider(value: player.volume) { player.setVolume($0) }
         .frame(width: hovering ? 110 : 0)
         .opacity(hovering ? 1 : 0)
-        .padding(.trailing, hovering ? 6 : 0)
+        .padding(.trailing, hovering ? 8 : 0)
       Text("\(Int(jsRound(level * 100)))%")
         .font(.system(size: 13, weight: level > 1 ? .bold : .regular))
         .monospacedDigit()
-        .foregroundStyle(level > 1 ? Theme.boost : Color(hex: 0xdddddd))
+        .foregroundStyle(level > 1 ? AnyShapeStyle(Theme.boost) : AnyShapeStyle(.secondary))
         .lineLimit(1)
         .fixedSize()
         .frame(width: hovering ? 44 : 0, alignment: .leading)
@@ -505,9 +551,11 @@ private struct VolumeSlider: View {
       let w = g.size.width
       let x = w * CGFloat(max(0, min(1, value / Prefs.maxVolume)))
       ZStack(alignment: .leading) {
-        Capsule().fill(Color.white.opacity(0.3)).frame(height: 4)
-        Capsule().fill(Color.white).frame(width: x, height: 4)
-        Circle().fill(Color.white).frame(width: 12, height: 12).offset(x: max(0, min(w - 12, x - 6)))
+        Capsule().fill(Color.white.opacity(0.25)).frame(height: 5)
+        Capsule().fill(Color.white).frame(width: x, height: 5)
+        Circle().fill(Color.white).frame(width: 13, height: 13)
+          .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
+          .offset(x: max(0, min(w - 13, x - 6.5)))
       }
       .frame(width: w, height: g.size.height)
       .contentShape(Rectangle())
@@ -532,18 +580,18 @@ private struct SpeedButton: View {
       player.togglePanel(.speed)
     } label: {
       HStack(spacing: 4) {
-        Image(systemName: "speedometer").font(.system(size: 20, weight: .medium))
+        Image(systemName: "gauge.with.dots.needle.67percent").font(.system(size: 17, weight: .medium))
         if changed {
           Text(fmtSpeed(player.speed)).font(.system(size: 13, weight: .bold)).monospacedDigit()
         }
       }
-      .padding(.horizontal, 6)
-      .frame(minWidth: 46, minHeight: 46)
+      .padding(.horizontal, changed ? 10 : 0)
+      .frame(minWidth: 40, minHeight: 40)
+      .background(Capsule().fill(Color.white.opacity(hovering ? 0.14 : 0)))
       .contentShape(Capsule())
     }
-    .buttonStyle(PlainTapStyle())
-    .foregroundStyle(changed ? Theme.boost : .white)
-    .scaleEffect(hovering ? 1.18 : 1)
+    .buttonStyle(PressStyle())
+    .foregroundStyle(changed ? AnyShapeStyle(Theme.boost) : AnyShapeStyle(.primary))
     .animation(.easeOut(duration: 0.15), value: hovering)
     .onHover { hovering = $0 }
     .help("Playback speed ([ and ])")
@@ -559,48 +607,29 @@ private struct CardsLayer: View {
   var body: some View {
     ZStack(alignment: .bottomTrailing) {
       if player.skipVisible {
-        SkipButton { player.skipIntro() }
-          .transition(.rise)
+        Button { player.skipIntro() } label: {
+          Label("Skip Intro", systemImage: "forward.fill")
+            .font(.title3.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+        }
+        .buttonStyle(.glass)
+        .controlSize(.extraLarge)
+        .help("Skip Intro (S)")
+        .transition(.rise)
       }
       if let next = player.nextCard {
         NextCard(player: player, next: next)
-          .frame(width: min(380, size.width * 0.9))
+          .frame(width: min(360, size.width * 0.9))
           .transition(.rise)
       }
     }
-    .padding(.trailing, size.width * 0.04)
-    .padding(.bottom, player.idle ? 60 : 150)
+    .padding(.trailing, PlayerMetrics.margin)
+    .padding(.bottom, player.idle ? 40 : PlayerMetrics.aboveBar)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
     .animation(.easeOut(duration: 0.3), value: player.skipVisible)
     .animation(.easeOut(duration: 0.35), value: player.nextCard)
     .animation(.easeOut(duration: 0.3), value: player.idle)
-  }
-}
-
-private struct SkipButton: View {
-  let action: () -> Void
-  @State private var hovering = false
-
-  var body: some View {
-    Button(action: action) {
-      HStack(spacing: 10) {
-        Image(systemName: "forward.fill").font(.system(size: 17))
-        Text("Skip Intro")
-      }
-      .font(.system(size: 17, weight: .bold))
-      .foregroundStyle(hovering ? Color.black : Color.white)
-      .padding(.vertical, 12)
-      .padding(.horizontal, 26)
-      .background(
-        RoundedRectangle(cornerRadius: 4)
-          .fill(hovering ? Color.white : Color(red: 30 / 255, green: 30 / 255, blue: 30 / 255).opacity(0.72))
-      )
-      .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.white.opacity(0.75), lineWidth: 2))
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(PlainTapStyle())
-    .onHover { hovering = $0 }
-    .help("Skip Intro (S)")
   }
 }
 
@@ -613,44 +642,35 @@ private struct NextCard: View {
     let name = app.file(next)?.name ?? ""
     let code = app.epCode(next)
     VStack(alignment: .leading, spacing: 0) {
-      ArtBox(.file(next, width: 480), seed: name, radius: 0, previewing: next)
-      VStack(alignment: .leading, spacing: 0) {
-        Text(code.isEmpty ? "Up next" : "Up next · \(code)")
-          .textCase(.uppercase)
-          .font(.system(size: 12))
-          .tracking(0.96)
-          .foregroundStyle(Theme.text2)
+      ArtBox(.file(next, width: 480), radius: 14, previewing: next)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(code.isEmpty ? "Up Next" : "Up Next · \(code)")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
         Text(name)
-          .font(.system(size: 17, weight: .bold))
+          .font(.headline)
           .lineLimit(2)
-          .padding(.top, 4)
-          .padding(.bottom, 14)
-        HStack(spacing: 10) {
-          CardButton(accent: true, action: { player.playNext() }) {
-            HStack(spacing: 8) {
-              Image(systemName: "play.fill").font(.system(size: 15))
-              Text("Next Episode")
-            }
-          } fill: {
-            CountdownFill(clock: player.clock)
-          }
-          CardButton(accent: false, action: { player.dismissNext() }) {
-            Text("Watch Credits")
-          } fill: {
-            EmptyView()
-          }
+      }
+      .padding(EdgeInsets(top: 10, leading: 4, bottom: 12, trailing: 4))
+      HStack(spacing: 8) {
+        CardButton(accent: true, action: { player.playNext() }) {
+          Label("Next Episode", systemImage: "play.fill")
+        } fill: {
+          CountdownFill(clock: player.clock)
+        }
+        CardButton(accent: false, action: { player.dismissNext() }) {
+          Text("Watch Credits")
+        } fill: {
+          EmptyView()
         }
       }
-      .padding(EdgeInsets(top: 14, leading: 16, bottom: 16, trailing: 16))
     }
-    .background(Color(red: 24 / 255, green: 24 / 255, blue: 24 / 255).opacity(0.94))
-    .clipShape(RoundedRectangle(cornerRadius: 6))
-    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-    .shadow(color: .black.opacity(0.6), radius: 20, y: 10)
+    .padding(10)
+    .glassEffect(playerGlass, in: .rect(cornerRadius: 24))
   }
 }
 
-/// The Next card's buttons: as wide as each other, accent or ghost.
+/// The Next card's buttons: as wide as each other, amber or quiet.
 private struct CardButton<Label: View, Fill: View>: View {
   let accent: Bool
   let action: () -> Void
@@ -661,21 +681,21 @@ private struct CardButton<Label: View, Fill: View>: View {
   var body: some View {
     Button(action: action) {
       label
-        .font(.system(size: 15, weight: .semibold))
+        .font(.system(size: 14, weight: .semibold))
         .lineLimit(1)
-        .foregroundStyle(accent ? Theme.onAccent : Theme.text)
+        .foregroundStyle(accent ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
         .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity, minHeight: 38)
+        .frame(maxWidth: .infinity, minHeight: 36)
         .background(alignment: .leading) {
           ZStack(alignment: .leading) {
-            accent ? (hovering ? Theme.accent2 : Theme.accent) : Color.white.opacity(hovering ? 0.14 : 0.08)
+            accent ? Theme.accent.opacity(hovering ? 0.88 : 1) : Color.white.opacity(hovering ? 0.2 : 0.12)
             fill
           }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(Capsule())
+        .contentShape(Capsule())
     }
-    .buttonStyle(PlainTapStyle())
+    .buttonStyle(PressStyle())
     .onHover { hovering = $0 }
   }
 }
@@ -686,7 +706,7 @@ private struct CountdownFill: View {
 
   var body: some View {
     GeometryReader { g in
-      Color.black.opacity(0.18).frame(width: g.size.width * CGFloat(max(0, min(1, clock.countdown))))
+      Color.black.opacity(0.16).frame(width: g.size.width * CGFloat(max(0, min(1, clock.countdown))))
     }
   }
 }
@@ -708,7 +728,8 @@ private struct PeekLayer: View {
           PeekCard(player: player, next: next)
             .frame(width: w)
             .alignmentGuide(.leading) { _ in -left }
-            .alignmentGuide(.top) { d in d.height - (b.minY - 12) }
+            // Above the bar, not just the button.
+            .alignmentGuide(.top) { d in d.height - (g.size.height - PlayerMetrics.aboveBar) }
             .opacity(player.idle ? 0 : 1)
             .allowsHitTesting(!player.idle)
             .transition(.rise)
@@ -731,31 +752,27 @@ private struct PeekCard: View {
     let dur = f?.duration ?? 0
     VStack(alignment: .leading, spacing: 0) {
       Text("Next Episode")
-        .textCase(.uppercase)
-        .font(.system(size: 12))
-        .tracking(0.96)
-        .foregroundStyle(Theme.text2)
-        .padding(EdgeInsets(top: 10, leading: 14, bottom: 8, trailing: 14))
-      ArtBox(.file(next, width: 480), seed: f?.name ?? "", radius: 0, previewing: next, previewEvery: 0.9) {
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(EdgeInsets(top: 2, leading: 4, bottom: 8, trailing: 4))
+      ArtBox(.file(next, width: 480), radius: 12, previewing: next, previewEvery: 0.9) {
         if let p, p.duration != 0 { ProgressEdge(fraction: AppModel.fraction(p)) }
       }
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: 2) {
         Text([app.epCode(next), f?.name ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
           .underline(hovering)
-          .font(.system(size: 15, weight: .bold))
+          .font(.headline)
           .lineLimit(1)
         if dur != 0 && !dur.isNaN {
-          Text("\(Int(jsRound(dur / 60))) min").font(.system(size: 12)).foregroundStyle(Theme.text2)
+          Text("\(Int(jsRound(dur / 60))) min").font(.subheadline).foregroundStyle(.secondary)
         }
       }
-      .padding(EdgeInsets(top: 10, leading: 14, bottom: 12, trailing: 14))
+      .padding(EdgeInsets(top: 10, leading: 4, bottom: 4, trailing: 4))
     }
+    .padding(10)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Theme.overlay)
-    .clipShape(RoundedRectangle(cornerRadius: 6))
-    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-    .shadow(color: .black.opacity(0.7), radius: 20, y: 10)
-    .contentShape(Rectangle())
+    .glassEffect(playerGlass, in: .rect(cornerRadius: 22))
+    .contentShape(RoundedRectangle(cornerRadius: 22))
     .onTapGesture { player.playNext() }
     .onHover { inside in
       hovering = inside
@@ -772,19 +789,22 @@ private struct ErrorLayer: View {
 
   var body: some View {
     VStack(spacing: 0) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .font(.system(size: 34))
+        .foregroundStyle(Theme.warn)
+        .padding(.bottom, 14)
       Text(failure.title)
-        .font(.system(size: 24, weight: .bold))
-        .padding(.bottom, 8)
+        .font(.title2.weight(.bold))
+        .padding(.bottom, 6)
       Text(failure.message)
-        .font(.system(size: 15))
-        .foregroundStyle(Color(hex: 0xbbbbbb))
+        .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: 520)
-        .padding(.bottom, 18)
-      HStack(spacing: 8) {
-        Button("Try again") { player.retry() }.buttonStyle(PillButtonStyle(kind: .accent))
-        Button("Back") { player.exit() }.buttonStyle(PillButtonStyle())
+        .padding(.bottom, 20)
+      HStack(spacing: 10) {
+        PrimaryButton("Try Again", large: false) { player.retry() }
+        Button("Back") { player.exit() }.glassButton(large: false)
       }
     }
     .padding(24)

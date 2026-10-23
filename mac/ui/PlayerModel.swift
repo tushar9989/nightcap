@@ -685,6 +685,8 @@ final class PlayerModel {
   /// (once OpenSubtitles is set up).
   func startOnline() {
     if online == nil { online = OnlineSearch(language: app.lib.settings.subtitleLanguage.isEmpty ? "en" : app.lib.settings.subtitleLanguage) }
+    // It may have been set up in Settings since the video opened.
+    if info?.onlineConfigured == false, app.engine.onlineSubs.status().configured { info?.onlineConfigured = true }
     guard info?.onlineConfigured == true else { return }
     if let o = online, o.results == nil, !o.loading, o.error == nil { onlineSearch() }
   }
