@@ -341,6 +341,7 @@ struct WindowRoot: View {
     } detail: {
       PageHost()
     }
+    .font(.app(.body))
     .searchable(text: search, placement: .toolbar, prompt: "Titles and episodes")
     .searchFocused($searchFocused)
     .toolbar {
@@ -407,7 +408,7 @@ private struct ToastView: View {
     VStack {
       if let t = win.toast {
         Text(t.text)
-          .font(.callout.weight(.medium))
+          .font(.app(.callout, weight: .medium))
           .multilineTextAlignment(.center)
           .padding(.vertical, 10)
           .padding(.horizontal, 18)

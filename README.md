@@ -11,7 +11,8 @@ shows and movies; each title has its own page with seasons and episodes.
 
 - **A Mac app in macOS 26's design** – a floating glass sidebar, Back/Forward
   and search in the toolbar, glass player controls, Settings in its own
-  window (⌘,), light or dark as the system is. The sidebar lists each title
+  window (⌘,), light or dark as the system is, its text set in Avenir Next
+  like the subtitles. The sidebar lists each title
   with its picture and what's next or how long it is. Every title and
   episode has a picture chosen from its own frames: sharp, well exposed,
   faces before scenery, no black frames, captions, screens or documents.

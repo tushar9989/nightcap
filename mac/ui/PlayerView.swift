@@ -219,9 +219,9 @@ private struct TopBar: View {
       let f = app.file(fid)
       let t = player.title
       VStack(alignment: .leading, spacing: 1) {
-        Text(t?.name ?? f?.name ?? "").font(.headline)
+        Text(t?.name ?? f?.name ?? "").font(.app(.headline))
         if t?.isShow == true {
-          Text("\(app.epCode(fid)) · \(f?.name ?? "")").font(.subheadline).foregroundStyle(.secondary)
+          Text("\(app.epCode(fid)) · \(f?.name ?? "")").font(.app(.subheadline)).foregroundStyle(.secondary)
         }
       }
       .lineLimit(1)
@@ -295,7 +295,7 @@ private struct ElapsedLabel: View {
 
   var body: some View {
     Text(fmtTime(player.dragging ? player.dragTime : clock.time))
-      .font(.callout)
+      .font(.app(.callout))
       .monospacedDigit()
       .foregroundStyle(.secondary)
       .frame(minWidth: 44, alignment: .leading)
@@ -310,7 +310,7 @@ private struct RemainingLabel: View {
     let dur = player.duration
     let t = player.dragging ? player.dragTime : clock.time
     Text(dur > 0 ? "-\(fmtTime(max(0, dur - t)))" : "")
-      .font(.callout)
+      .font(.app(.callout))
       .monospacedDigit()
       .foregroundStyle(.secondary)
       .frame(minWidth: 44, alignment: .trailing)
@@ -415,7 +415,7 @@ private struct ScrubBar: View {
         .frame(width: ScrubBar.thumbWidth, height: CGFloat(h))
         .clipShape(RoundedRectangle(cornerRadius: 8))
       }
-      Text(fmtTime(t) + place).font(.callout.weight(.medium)).monospacedDigit()
+      Text(fmtTime(t) + place).font(.app(.callout, weight: .medium)).monospacedDigit()
     }
     .padding(EdgeInsets(top: trick != nil ? 5 : 4, leading: trick != nil ? 5 : 10, bottom: 5, trailing: trick != nil ? 5 : 10))
     .background(RoundedRectangle(cornerRadius: trick != nil ? 13 : 9).fill(Color.black.opacity(0.82)))
@@ -465,7 +465,7 @@ private struct ControlsRow: View {
       PlayerButton(icon: "goforward.10", help: "Forward 10 s (→)") { player.seek(player.time + 10) }
       VolumeControl(player: player)
       Text(midTitle)
-        .font(.callout)
+        .font(.app(.callout))
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.tail)
@@ -527,7 +527,7 @@ private struct VolumeControl: View {
         .opacity(hovering ? 1 : 0)
         .padding(.trailing, hovering ? 8 : 0)
       Text("\(Int(jsRound(level * 100)))%")
-        .font(.system(size: 13, weight: level > 1 ? .bold : .regular))
+        .font(.app(size: 13, weight: level > 1 ? .bold : .regular))
         .monospacedDigit()
         .foregroundStyle(level > 1 ? AnyShapeStyle(Theme.boost) : AnyShapeStyle(.secondary))
         .lineLimit(1)
@@ -582,7 +582,7 @@ private struct SpeedButton: View {
       HStack(spacing: 4) {
         Image(systemName: "gauge.with.dots.needle.67percent").font(.system(size: 17, weight: .medium))
         if changed {
-          Text(fmtSpeed(player.speed)).font(.system(size: 13, weight: .bold)).monospacedDigit()
+          Text(fmtSpeed(player.speed)).font(.app(size: 13, weight: .bold)).monospacedDigit()
         }
       }
       .padding(.horizontal, changed ? 10 : 0)
@@ -612,7 +612,7 @@ private struct CardsLayer: View {
       if player.skipVisible {
         Button { player.skipIntro() } label: {
           Label("Skip Intro", systemImage: "forward.fill")
-            .font(.title3.weight(.semibold))
+            .font(.app(.title3, weight: .semibold))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
         }
@@ -648,10 +648,10 @@ private struct NextCard: View {
       ArtBox(.file(next, width: 480), radius: 14, previewing: next)
       VStack(alignment: .leading, spacing: 2) {
         Text(code.isEmpty ? "Up Next" : "Up Next · \(code)")
-          .font(.caption.weight(.semibold))
+          .font(.app(.caption, weight: .semibold))
           .foregroundStyle(.secondary)
         Text(name)
-          .font(.headline)
+          .font(.app(.headline))
           .lineLimit(2)
       }
       .padding(EdgeInsets(top: 10, leading: 4, bottom: 12, trailing: 4))
@@ -684,7 +684,7 @@ private struct CardButton<Label: View, Fill: View>: View {
   var body: some View {
     Button(action: action) {
       label
-        .font(.system(size: 14, weight: .semibold))
+        .font(.app(size: 14, weight: .semibold))
         .lineLimit(1)
         .foregroundStyle(accent ? AnyShapeStyle(Theme.onAccent) : AnyShapeStyle(.primary))
         .padding(.horizontal, 12)
@@ -755,7 +755,7 @@ private struct PeekCard: View {
     let dur = f?.duration ?? 0
     VStack(alignment: .leading, spacing: 0) {
       Text("Next Episode")
-        .font(.caption.weight(.semibold))
+        .font(.app(.caption, weight: .semibold))
         .foregroundStyle(.secondary)
         .padding(EdgeInsets(top: 2, leading: 4, bottom: 8, trailing: 4))
       ArtBox(.file(next, width: 480), radius: 12, previewing: next, previewEvery: 0.9) {
@@ -764,10 +764,10 @@ private struct PeekCard: View {
       VStack(alignment: .leading, spacing: 2) {
         Text([app.epCode(next), f?.name ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
           .underline(hovering)
-          .font(.headline)
+          .font(.app(.headline))
           .lineLimit(1)
         if dur != 0 && !dur.isNaN {
-          Text("\(Int(jsRound(dur / 60))) min").font(.subheadline).foregroundStyle(.secondary)
+          Text("\(Int(jsRound(dur / 60))) min").font(.app(.subheadline)).foregroundStyle(.secondary)
         }
       }
       .padding(EdgeInsets(top: 10, leading: 4, bottom: 4, trailing: 4))
@@ -797,7 +797,7 @@ private struct ErrorLayer: View {
         .foregroundStyle(Theme.warn)
         .padding(.bottom, 14)
       Text(failure.title)
-        .font(.title2.weight(.bold))
+        .font(.app(.title2, weight: .bold))
         .padding(.bottom, 6)
       Text(failure.message)
         .foregroundStyle(.secondary)

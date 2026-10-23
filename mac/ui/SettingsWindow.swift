@@ -82,9 +82,16 @@ private struct SettingsForm<Content: View>: View {
   var body: some View {
     Form { content }
       .formStyle(.grouped)
+      .font(.app(.body))
       .frame(width: SettingsMetrics.width, height: SettingsMetrics.height)
   }
 }
+
+// A grouped form sets its own type on section headers and on the line under a setting's
+// name, over the window's: the sizes macOS gives them (13 pt semibold and 11 pt, measured),
+// in the app's face.
+private func header(_ text: String) -> Text { Text(text).font(.app(.body, weight: .semibold)) }
+private func detail(_ text: String) -> Text { Text(text).font(.app(.subheadline)) }
 
 /// A note under a setting, or a line of status: small and secondary.
 private struct Note: View {
@@ -98,7 +105,7 @@ private struct Note: View {
 
   var body: some View {
     Text(text)
-      .font(.callout)
+      .font(.app(.callout))
       .foregroundStyle(color.map(AnyShapeStyle.init) ?? AnyShapeStyle(.secondary))
       .fixedSize(horizontal: false, vertical: true)
   }
@@ -130,7 +137,7 @@ private struct LibrarySettings: View {
           if let note { Note(note.text, color: note.failed ? Theme.error : nil).lineLimit(2) }
         }
       } header: {
-        Text("Folders")
+        header("Folders")
       } footer: {
         Note("Each subfolder of a show becomes a season. Folders are rescanned every 15 minutes, and your progress is kept even while a drive is unplugged.")
       }
@@ -138,11 +145,11 @@ private struct LibrarySettings: View {
       Section {
         Toggle(isOn: Binding(get: { lib.settings.analysis }, set: { update(SettingsPatch(analysis: $0)) })) {
           Text("Detect intros and credits")
-          Text("Uses some CPU in the background while new episodes are analysed.")
+          detail("Uses some CPU in the background while new episodes are analysed.")
         }
         AnalysisProgress(status: app.status.analysis)
       } header: {
-        Text("Intros and Credits")
+        header("Intros and Credits")
       } footer: {
         Note("Runs on this Mac. The first and last minutes of each episode are compared with the rest of its season by sound: music they share is the intro or the end credits. Films are checked for text on black. Results are saved, so only new episodes are analysed.")
       }
@@ -150,11 +157,11 @@ private struct LibrarySettings: View {
       Section {
         Toggle(isOn: Binding(get: { lib.settings.previews }, set: { update(SettingsPatch(previews: $0)) })) {
           Text("Make preview thumbnails")
-          Text("What you open or play is done first. About 2 MB per episode.")
+          detail("What you open or play is done first. About 2 MB per episode.")
         }
         PreviewsProgress(status: app.status.previews)
       } header: {
-        Text("Previews")
+        header("Previews")
       } footer: {
         Note("A frame every few seconds of each episode and film, shown above the seek bar, when you rest the pointer on an episode, and for the next episode at the end credits.")
       }
@@ -219,14 +226,14 @@ private struct FolderRow: View {
       VStack(alignment: .leading, spacing: 2) {
         Text(basename(folder.path)).lineLimit(1)
         Text(folder.path)
-          .font(.caption)
+          .font(.app(.caption))
           .foregroundStyle(.secondary)
           .lineLimit(1)
           .truncationMode(.middle)
           .textSelection(.enabled)
           .help(folder.path)
         Text(stat ?? "Not scanned yet")
-          .font(.caption)
+          .font(.app(.caption))
           .foregroundStyle(offline ? AnyShapeStyle(Theme.warn) : AnyShapeStyle(.secondary))
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -329,11 +336,11 @@ private struct PlaybackSettings: View {
       Section {
         Toggle(isOn: Binding(get: { s.autoSkipIntro }, set: { update(SettingsPatch(autoSkipIntro: $0)) })) {
           Text("Skip intros automatically")
-          Text("Otherwise a Skip Intro button appears during the intro.")
+          detail("Otherwise a Skip Intro button appears during the intro.")
         }
         Toggle(isOn: Binding(get: { s.autoplayNext }, set: { update(SettingsPatch(autoplayNext: $0)) })) {
           Text("Play the next episode automatically")
-          Text("When the end credits start, count down and play the next episode.")
+          detail("When the end credits start, count down and play the next episode.")
         }
         // A value set some other way (the settings file) is listed too, so the menu shows what is in use.
         let current = s.nextCountdown
@@ -343,7 +350,7 @@ private struct PlaybackSettings: View {
         }
         .disabled(!s.autoplayNext)
       } header: {
-        Text("Episodes")
+        header("Episodes")
       }
 
       Section {
@@ -353,7 +360,7 @@ private struct PlaybackSettings: View {
           }
         }
       } header: {
-        Text("Keyboard")
+        header("Keyboard")
       }
     }
   }
@@ -377,14 +384,14 @@ private struct SubtitleSettings: View {
           ForEach(subLanguages(s.subtitleLanguage), id: \.code) { Text($0.name).tag($0.code) }
         } label: {
           Text("Language")
-          Text("Searched first, and used for automatic downloads.")
+          detail("Searched first, and used for automatic downloads.")
         }
         Toggle(isOn: Binding(get: { s.autoFetchSubtitles }, set: { update(SettingsPatch(autoFetchSubtitles: $0)) })) {
           Text("Download missing subtitles automatically")
-          Text("When subtitles are on and an episode has none in your language, fetch the best match from OpenSubtitles (one download from the daily allowance per episode).")
+          detail("When subtitles are on and an episode has none in your language, fetch the best match from OpenSubtitles (one download from the daily allowance per episode).")
         }
       } header: {
-        Text("Subtitles")
+        header("Subtitles")
       } footer: {
         Note("Subtitle files next to a video and tracks inside it are found automatically. In the player, Subtitles › Search Online finds more, preferring ones timed for your exact file. Adverts uploaders put into subtitles are hidden.")
       }
@@ -422,7 +429,7 @@ private struct OpenSubtitlesSection: View {
       }
     } header: {
       HStack {
-        Text("OpenSubtitles.com")
+        header("OpenSubtitles.com")
         Spacer()
         if let st = status { badge(st) }
       }
@@ -438,7 +445,7 @@ private struct OpenSubtitlesSection: View {
 
   private func badge(_ st: OpenSubtitles.Status) -> some View {
     Text(st.configured ? (st.signedIn ? "Signed In" : "Connected") : "Not Set Up")
-      .font(.caption.weight(.semibold))
+      .font(.app(.caption, weight: .semibold))
       .foregroundStyle(st.configured ? Theme.ok : .secondary)
       .padding(.vertical, 2)
       .padding(.horizontal, 8)
@@ -472,7 +479,7 @@ private struct OpenSubtitlesSection: View {
         }
       } label: {
         Text("API key")
-        Text(st.keyFromEnv ? "\(st.keyHint) (from OPENSUBTITLES_API_KEY)" : st.keyHint).monospaced()
+        Text(st.keyFromEnv ? "\(st.keyHint) (from OPENSUBTITLES_API_KEY)" : st.keyHint).font(.subheadline.monospaced())
       }
       if st.signedIn {
         let details = [st.level, st.allowedDownloads.map { "\(jsNumber($0)) downloads a day" } ?? ""].filter { !$0.isEmpty }
@@ -481,7 +488,7 @@ private struct OpenSubtitlesSection: View {
             .disabled(busy)
         } label: {
           Text("Signed in as \(st.username)")
-          Text(details.joined(separator: " · ") + left)
+          detail(details.joined(separator: " · ") + left)
         }
       } else {
         Note(

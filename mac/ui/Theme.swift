@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 // The look: macOS's own (system colours, type styles and controls, light or
-// dark as the Mac is set), with an amber accent.
+// dark as the Mac is set), with an amber accent; text is set in Avenir Next,
+// the subtitles' face, at the system styles' sizes.
 
 enum Theme {
   /// The accent: amber, a little deeper in light mode so it holds up on white.
@@ -31,6 +32,90 @@ enum Theme {
   static let radius: CGFloat = 10
   static let gridMin: CGFloat = 220
   static let gridWideMin: CGFloat = 300
+}
+
+// ---- Type: Avenir Next, the subtitles' face, everywhere text is set -----------------
+
+extension Font {
+  /// A macOS text style in Avenir Next, at the system font's weight for that
+  /// style unless one is given.
+  static func app(_ style: Font.TextStyle, weight: Font.Weight? = nil) -> Font {
+    let sys = NSFont.preferredFont(forTextStyle: AppType.nsStyle(style))
+    let traits = sys.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any]
+    let sysWeight = NSFont.Weight(rawValue: (traits?[.weight] as? CGFloat) ?? 0)
+    return app(size: sys.pointSize, weight: weight ?? AppType.weight(sysWeight))
+  }
+
+  /// Avenir Next at a size chosen for the system font: as large as the
+  /// system font's lowercase letters (as the subtitles are sized), so text
+  /// keeps the room it had.
+  static func app(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+    .custom(AppType.face(weight), fixedSize: AppType.scaled(size, weight))
+  }
+}
+
+private enum AppType {
+  static func face(_ w: Font.Weight) -> String {
+    switch w {
+    case .ultraLight, .thin: "AvenirNext-UltraLight"
+    case .medium: "AvenirNext-Medium"
+    case .semibold: "AvenirNext-DemiBold"
+    case .bold: "AvenirNext-Bold"
+    case .heavy, .black: "AvenirNext-Heavy"
+    default: "AvenirNext-Regular"
+    }
+  }
+
+  static func nsWeight(_ w: Font.Weight) -> NSFont.Weight {
+    switch w {
+    case .ultraLight: .ultraLight
+    case .thin: .thin
+    case .light: .light
+    case .medium: .medium
+    case .semibold: .semibold
+    case .bold: .bold
+    case .heavy: .heavy
+    case .black: .black
+    default: .regular
+    }
+  }
+
+  static func weight(_ w: NSFont.Weight) -> Font.Weight {
+    if w >= .black { return .black }
+    if w >= .heavy { return .heavy }
+    if w >= .bold { return .bold }
+    if w >= .semibold { return .semibold }
+    if w >= .medium { return .medium }
+    return .regular
+  }
+
+  static func nsStyle(_ s: Font.TextStyle) -> NSFont.TextStyle {
+    switch s {
+    case .largeTitle: .largeTitle
+    case .title: .title1
+    case .title2: .title2
+    case .title3: .title3
+    case .headline: .headline
+    case .subheadline: .subheadline
+    case .callout: .callout
+    case .footnote: .footnote
+    case .caption: .caption1
+    case .caption2: .caption2
+    default: .body
+    }
+  }
+
+  /// Lowercase height over point size, per weight: the system font's and Avenir Next's.
+  private static var ratios: [Font.Weight: CGFloat] = [:]
+
+  static func scaled(_ size: CGFloat, _ w: Font.Weight) -> CGFloat {
+    if let r = ratios[w] { return size * r }
+    let sys = NSFont.systemFont(ofSize: 100, weight: nsWeight(w))
+    guard let face = NSFont(name: face(w), size: 100), face.xHeight > 0 else { return size }
+    let r = sys.xHeight / face.xHeight
+    ratios[w] = r
+    return size * r
+  }
 }
 
 /// Widths that change the layout (of the page, not the window).

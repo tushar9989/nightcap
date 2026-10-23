@@ -152,7 +152,7 @@ private struct PanelColumns: Layout {
 private struct PanelHeading: View {
   let text: String
   var body: some View {
-    Text(text).font(.system(size: 17, weight: .bold)).padding(.bottom, 10)
+    Text(text).font(.app(size: 17, weight: .bold)).padding(.bottom, 10)
   }
 }
 
@@ -174,7 +174,7 @@ private struct PanelOption: View {
           .frame(width: 14, alignment: .leading)
         Text(label).fixedSize(horizontal: false, vertical: true)
       }
-      .font(.system(size: 14, weight: on ? .semibold : .regular))
+      .font(.app(size: 14, weight: on ? .semibold : .regular))
       .foregroundStyle(style)
       .padding(.vertical, 6)
       .padding(.horizontal, 8)
@@ -206,7 +206,7 @@ private struct PanelButton: View {
   var body: some View {
     Button(action: action) {
       Text(label)
-        .font(.system(size: 13))
+        .font(.app(size: 13))
         .multilineTextAlignment(leading ? .leading : .center)
         .padding(padding)
         .frame(maxWidth: full ? .infinity : nil, alignment: leading ? .leading : .center)
@@ -286,10 +286,10 @@ private struct SubtitlesColumn: View {
   private func timing(_ id: String, track: SubtitleTrack?) -> some View {
     let d = player.subDelay
     return VStack(alignment: .leading, spacing: 0) {
-      Text("Timing (G / H)").font(.system(size: 13)).foregroundStyle(Theme.text2)
+      Text("Timing (G / H)").font(.app(size: 13)).foregroundStyle(Theme.text2)
       HStack(spacing: 6) {
         PanelButton(label: "Earlier", help: "Show subtitles earlier (G)") { player.setSubDelay(d - 0.25, osd: false) }
-        Text(fmtDelay(d)).font(.system(size: 14)).monospacedDigit().frame(minWidth: 52)
+        Text(fmtDelay(d)).font(.app(size: 14)).monospacedDigit().frame(minWidth: 52)
         PanelButton(label: "Later", help: "Show subtitles later (H)") { player.setSubDelay(d + 0.25, osd: false) }
       }
       .padding(.top, 6)
@@ -309,7 +309,7 @@ private struct SubtitlesColumn: View {
             .underline()
             .padding(.horizontal, 4)
         }
-        .font(.system(size: 12))
+        .font(.app(size: 12))
         .foregroundStyle(Theme.text2)
         .frame(width: 220, alignment: .leading)
         .padding(.top, 6)
@@ -337,7 +337,7 @@ private struct MarkersColumn: View {
         Text(status(m)).foregroundStyle(Theme.text2)
         if !decoding.isEmpty { Text(decoding).foregroundStyle(Theme.text2) }
       }
-      .font(.system(size: 13))
+      .font(.app(size: 13))
       .padding(.bottom, 10)
       VStack(alignment: .leading, spacing: 6) {
         MarkerButton(clock: player.clock, label: "Intro starts here") {
@@ -405,10 +405,10 @@ private struct OnlinePanel: View {
             Image(systemName: "chevron.left").font(.system(size: 12, weight: .semibold))
             Text("Subtitles")
           }
-          .font(.system(size: 13))
+          .font(.app(size: 13))
         }
         .buttonStyle(QuietButtonStyle())
-        Text("Find Subtitles Online").font(.system(size: 17, weight: .bold))
+        Text("Find Subtitles Online").font(.app(size: 17, weight: .bold))
       }
       .padding(EdgeInsets(top: 14, leading: 8, bottom: 10, trailing: 16))
       if player.info?.onlineConfigured == true, let o = player.online {
@@ -424,7 +424,7 @@ private struct OnlinePanel: View {
             .fixedSize(horizontal: false, vertical: true)
           PrimaryButton("Set Up in Settings…", large: false) { win.openSettings(.subtitles) }
         }
-        .font(.system(size: 14))
+        .font(.app(size: 14))
         .foregroundStyle(Theme.text2)
         .padding(EdgeInsets(top: 4, leading: 16, bottom: 18, trailing: 16))
         credit(nil)
@@ -485,19 +485,19 @@ private struct OnlinePanel: View {
     return VStack(alignment: .leading, spacing: 0) {
       if !mine.isEmpty {
         VStack(alignment: .leading, spacing: 2) {
-          Text("Downloaded for this video").font(.system(size: 13)).foregroundStyle(Theme.text2)
+          Text("Downloaded for this video").font(.app(size: 13)).foregroundStyle(Theme.text2)
           ForEach(mine) { s in
             HStack(spacing: 10) {
-              Text(s.label).font(.system(size: 13)).fixedSize()
+              Text(s.label).font(.app(size: 13)).fixedSize()
               Text(s.release ?? "")
-                .font(.system(size: 11.5))
+                .font(.app(size: 11.5))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(s.release ?? "")
               Button("Remove") { player.removeTrack(s.id) }
-                .font(.system(size: 12))
+                .font(.app(size: 12))
                 .buttonStyle(QuietButtonStyle())
             }
           }
@@ -517,7 +517,7 @@ private struct OnlinePanel: View {
       Spacer(minLength: 0)
       if let status { Text(OnlinePanel.quota(status)) }
     }
-    .font(.system(size: 12))
+    .font(.app(size: 12))
     .foregroundStyle(Theme.text2)
   }
 
@@ -531,7 +531,7 @@ private struct OnlinePanel: View {
 private struct OnlineNote: ViewModifier {
   func body(content: Content) -> some View {
     content
-      .font(.system(size: 14))
+      .font(.app(size: 14))
       .foregroundStyle(Theme.text2)
       .fixedSize(horizontal: false, vertical: true)
       .padding(.vertical, 18)
@@ -550,7 +550,7 @@ private struct Badge: View {
 
   var body: some View {
     Text(text)
-      .font(.system(size: 11, weight: .semibold))
+      .font(.app(size: 11, weight: .semibold))
       .padding(.horizontal, 7)
       .padding(.vertical, 1)
       .foregroundStyle(color)
@@ -581,7 +581,7 @@ private struct ResultRow: View {
     Button(action: action) {
       VStack(alignment: .leading, spacing: 3) {
         Text(release)
-          .font(.system(size: 14))
+          .font(.app(size: 14))
           .foregroundStyle(.primary)
           .lineLimit(1)
           .truncationMode(.tail)
@@ -594,7 +594,7 @@ private struct ResultRow: View {
           Text(meta)
           if busy { Text(busyText).foregroundStyle(.primary) }
         }
-        .font(.system(size: 12))
+        .font(.app(size: 12))
         .foregroundStyle(Theme.text2)
       }
       .padding(.vertical, 8)
@@ -635,7 +635,7 @@ private struct SpeedPanel: View {
       PlayerModel.speedStops.contains(player.speed)
       ? PlayerModel.speedStops : (PlayerModel.speedStops + [player.speed]).sorted()
     VStack(alignment: .leading, spacing: 0) {
-      Text("Playback Speed").font(.system(size: 17, weight: .bold)).padding(.bottom, 18)
+      Text("Playback Speed").font(.app(size: 17, weight: .bold)).padding(.bottom, 18)
       HStack(alignment: .top, spacing: 0) {
         ForEach(stops, id: \.self) { sp in
           SpeedStop(speed: sp, on: sp == player.speed) { player.setSpeed(sp) }
@@ -645,7 +645,7 @@ private struct SpeedPanel: View {
         Color.white.opacity(0.22).frame(height: 2).padding(.horizontal, 30).padding(.top, 9)
       }
       Text("[ slower · ] faster · { } fine steps · = normal. Voices keep their pitch.")
-        .font(.system(size: 13))
+        .font(.app(size: 13))
         .foregroundStyle(Theme.text2)
         .padding(.top, 16)
     }
@@ -673,9 +673,9 @@ private struct SpeedStop: View {
           }
         }
         .frame(width: 20, height: 20)
-        Text(fmtSpeed(speed)).font(.system(size: 14, weight: on ? .bold : .regular)).monospacedDigit()
+        Text(fmtSpeed(speed)).font(.app(size: 14, weight: on ? .bold : .regular)).monospacedDigit()
         if speed == 1 {
-          Text("Normal").font(.system(size: 11)).foregroundStyle(.tertiary).padding(.top, -6)
+          Text("Normal").font(.app(size: 11)).foregroundStyle(.tertiary).padding(.top, -6)
         }
       }
       .foregroundStyle(on || hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
@@ -705,7 +705,7 @@ private struct EpisodesPanel: View {
       let episodes = t.seasons[season].episodes
       VStack(spacing: 0) {
         HStack(spacing: 12) {
-          Text(t.name).font(.system(size: 17, weight: .bold)).lineLimit(1)
+          Text(t.name).font(.app(size: 17, weight: .bold)).lineLimit(1)
           Spacer(minLength: 0)
           if t.seasons.count > 1 {
             Picker("Season", selection: Binding(get: { season }, set: { player.panelSeason = $0 })) {
@@ -763,10 +763,10 @@ private struct PanelEpisodeRow: View {
       .frame(width: 120)
       VStack(alignment: .leading, spacing: 3) {
         Text("\(f?.number.map { "\($0). " } ?? "")\(f?.name ?? "")")
-          .font(.system(size: 14, weight: .bold))
+          .font(.app(size: 14, weight: .bold))
           .lineLimit(1)
         Text(dur != 0 && !dur.isNaN ? "\(Int(jsRound(dur / 60))) min" : "")
-          .font(.system(size: 12))
+          .font(.app(size: 12))
           .foregroundStyle(Theme.text2)
       }
       .frame(maxWidth: .infinity, alignment: .leading)

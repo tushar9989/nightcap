@@ -23,7 +23,7 @@ struct PageScroll<Content: View>: View {
 struct PageTitle: View {
   let text: String
   var body: some View {
-    Text(text).font(.system(size: 30, weight: .bold)).lineLimit(1).padding(.bottom, 20)
+    Text(text).font(.app(size: 30, weight: .bold)).lineLimit(1).padding(.bottom, 20)
   }
 }
 
@@ -34,7 +34,7 @@ struct Block<Content: View>: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
-      Text(title).font(.title2.weight(.bold))
+      Text(title).font(.app(.title2, weight: .bold))
       content
     }
     .padding(.bottom, 36)
@@ -144,8 +144,8 @@ struct TitleTile: View {
         ArtBox(.title(title.id, width: 800))
           .modifier(Lift(hovering: hovering))
         VStack(alignment: .leading, spacing: 2) {
-          Text(title.name).font(.headline).lineLimit(1)
-          Text(app.titleMeta(title)).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+          Text(title.name).font(.app(.headline)).lineLimit(1)
+          Text(app.titleMeta(title)).font(.app(.subheadline)).foregroundStyle(.secondary).lineLimit(1)
         }
         .padding(EdgeInsets(top: 10, leading: 2, bottom: 0, trailing: 2))
       }
@@ -186,11 +186,11 @@ struct WatchingTile: View {
           }
           .modifier(Lift(hovering: hovering))
           VStack(alignment: .leading, spacing: 2) {
-            Text(t.name).font(.headline).lineLimit(1)
+            Text(t.name).font(.app(.headline)).lineLimit(1)
             Text(t.isShow ? "\(app.epCode(nu.fileId)) · \(name)" : left)
-              .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+              .font(.app(.subheadline)).foregroundStyle(.secondary).lineLimit(1)
             if t.isShow {
-              Text(left).font(.subheadline).foregroundStyle(.tertiary).lineLimit(1)
+              Text(left).font(.app(.subheadline)).foregroundStyle(.tertiary).lineLimit(1)
             }
           }
           .padding(EdgeInsets(top: 10, leading: 2, bottom: 0, trailing: 2))
@@ -344,7 +344,7 @@ private struct EpisodeRow: View {
     HStack(spacing: 16) {
       if !showName && !m.narrow {
         Text(f?.number.map(String.init) ?? "")
-          .font(.title3).monospacedDigit()
+          .font(.app(.title3)).monospacedDigit()
           .foregroundStyle(current ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
           .frame(width: 30, alignment: .trailing)
       }
@@ -354,16 +354,16 @@ private struct EpisodeRow: View {
       }
       .frame(width: m.narrow ? 128 : 176)
       VStack(alignment: .leading, spacing: 3) {
-        Text(name).font(.headline).lineLimit(2)
+        Text(name).font(.app(.headline)).lineLimit(2)
         if showName, let w = app.location(fid) {
-          Text("\(w.title.name) · \(app.epCode(fid))").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+          Text("\(w.title.name) · \(app.epCode(fid))").font(.app(.subheadline)).foregroundStyle(.secondary).lineLimit(1)
         }
         if !marks.isEmpty {
-          Text(marks).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+          Text(marks).font(.app(.subheadline)).foregroundStyle(.secondary).lineLimit(1)
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      Text(fmtDur(f?.duration ?? 0)).font(.subheadline).monospacedDigit().foregroundStyle(.secondary).fixedSize()
+      Text(fmtDur(f?.duration ?? 0)).font(.app(.subheadline)).monospacedDigit().foregroundStyle(.secondary).fixedSize()
       if toggle {
         WatchToggle(on: watched) { setWatched(!watched) }
       }
@@ -510,12 +510,12 @@ private struct TitleHero: View {
 
       VStack(alignment: .leading, spacing: 0) {
         Text(t.name)
-          .font(.system(size: m.narrow ? 32 : 42, weight: .bold))
+          .font(.app(size: m.narrow ? 32 : 42, weight: .bold))
           .lineLimit(2)
           .minimumScaleFactor(0.7)
           .padding(.bottom, 6)
         Text(facts(main: main, watchedCount: watchedCount))
-          .font(.title3).foregroundStyle(.secondary).lineLimit(1)
+          .font(.app(.title3)).foregroundStyle(.secondary).lineLimit(1)
           .padding(.bottom, 16)
         HStack(spacing: 10) {
           PrimaryButton { win.play(nu.fileId, at: nu.start) } label: {
@@ -581,7 +581,7 @@ private struct DetectNote: View {
       : credits > 0
         ? "End credits found: it counts as watched once they start" : working ? "Looking for the end credits…" : "No end credits found yet"
     Label(text, systemImage: working ? "waveform" : "checkmark.seal")
-      .font(.callout)
+      .font(.app(.callout))
       .foregroundStyle(.secondary)
       .lineLimit(1)
       .help(text)
@@ -604,7 +604,7 @@ private struct TitleList: View {
         if t.seasons.count > 1 {
           SeasonMenu(t: t, selected: seasonIdx)
         } else {
-          Text(t.isShow ? "Episodes" : "Parts").font(.title2.weight(.bold))
+          Text(t.isShow ? "Episodes" : "Parts").font(.app(.title2, weight: .bold))
         }
         Spacer(minLength: 0)
         Button(seasonWatched ? "Mark \(what) as Unwatched" : "Mark \(what) as Watched") {
@@ -646,7 +646,7 @@ private struct SeasonMenu: View {
       .labelsHidden()
     } label: {
       HStack(spacing: 6) {
-        Text(t.seasons[selected].name).font(.title2.weight(.bold))
+        Text(t.seasons[selected].name).font(.app(.title2, weight: .bold))
         Image(systemName: "chevron.down").font(.callout.weight(.bold)).foregroundStyle(.secondary)
       }
       .contentShape(Rectangle())
@@ -670,7 +670,7 @@ private struct FilmDetails: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
       if !moments.isEmpty {
-        Text("Scenes").font(.title2.weight(.bold)).padding(.horizontal, 10)
+        Text("Scenes").font(.app(.title2, weight: .bold)).padding(.horizontal, 10)
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 20, alignment: .top)], alignment: .leading, spacing: 22) {
           ForEach(moments, id: \.self) { time in
             SceneTile(fid: fid, time: time) { win.play(fid, at: time) }
@@ -709,7 +709,7 @@ private struct SceneTile: View {
           PlayHint(visible: hovering, size: 38)
         }
         .modifier(Lift(hovering: hovering))
-        Text(fmtTime(time)).font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+        Text(fmtTime(time)).font(.app(.subheadline)).monospacedDigit().foregroundStyle(.secondary)
           .padding(.horizontal, 2)
       }
     }

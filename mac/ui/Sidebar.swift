@@ -26,24 +26,30 @@ struct Sidebar: View {
       get: { pick(watching) },
       set: { item in if let item { choose(item) } })
     List(selection: selection) {
-      Label("Home", systemImage: "house").tag(SideItem.home)
-      Label("Shows", systemImage: "tv").tag(SideItem.shows)
-      Label("Movies", systemImage: "film").tag(SideItem.movies)
+      place("Home", "house").tag(SideItem.home)
+      place("Shows", "tv").tag(SideItem.shows)
+      place("Movies", "film").tag(SideItem.movies)
       if !watching.isEmpty {
-        Section("Watching", isExpanded: $watchingOpen) {
+        Section(isExpanded: $watchingOpen) {
           ForEach(watching) { w in
             TitleRow(title: w.title, watching: w).tag(SideItem.title(w.title.id, list: 0))
           }
+        } header: {
+          header("Watching")
         }
       }
       if !shows.isEmpty {
-        Section("Shows", isExpanded: $showsOpen) {
+        Section(isExpanded: $showsOpen) {
           ForEach(shows, id: \.id) { TitleRow(title: $0).tag(SideItem.title($0.id, list: 1)) }
+        } header: {
+          header("Shows")
         }
       }
       if !movies.isEmpty {
-        Section("Movies", isExpanded: $moviesOpen) {
+        Section(isExpanded: $moviesOpen) {
           ForEach(movies, id: \.id) { TitleRow(title: $0).tag(SideItem.title($0.id, list: 1)) }
+        } header: {
+          header("Movies")
         }
       }
     }
@@ -62,6 +68,16 @@ struct Sidebar: View {
       if win.sideList == 0 && watching.contains(where: { $0.title.id == id }) { return .title(id, list: 0) }
       return .title(id, list: 1)
     }
+  }
+
+  // The list sets its own type on these over the window's: the sizes macOS gives them
+  // (13 pt, and 11 pt semibold for headers, measured), in the app's face.
+  private func place(_ name: String, _ symbol: String) -> some View {
+    Label { Text(name).font(.app(.body)) } icon: { Image(systemName: symbol) }
+  }
+
+  private func header(_ name: String) -> some View {
+    Text(name).font(.app(.subheadline, weight: .semibold))
   }
 
   private func choose(_ item: SideItem) {
@@ -93,7 +109,7 @@ private struct TitleRow: View {
       VStack(alignment: .leading, spacing: 1) {
         Text(title.name).lineLimit(1).truncationMode(.tail)
         if !detail.isEmpty {
-          Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+          Text(detail).font(.app(.subheadline)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
         }
       }
     }
@@ -134,7 +150,7 @@ private struct ActivityStatus: View {
     if let text = activity {
       HStack(spacing: 8) {
         ProgressView().controlSize(.mini)
-        Text(text).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+        Text(text).font(.app(.caption)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
       }
       .padding(.horizontal, 18)
       .padding(.vertical, 12)
