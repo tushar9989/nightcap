@@ -61,7 +61,7 @@ struct PlayerView: View {
       let size = g.size
       ZStack {
         SurfaceHost(surface: player.surface)
-        SubtitlesLayer(clock: player.clock, idle: player.idle, size: size)
+        SubtitlesLayer(player: player, clock: player.clock, idle: player.idle, size: size)
         CenterLayer(sign: player.center)
         ControlsLayer(player: player, fullScreen: fullScreen)
         if let failure = player.failure {
@@ -83,6 +83,7 @@ struct PlayerView: View {
 // ---- Subtitles and the middle of the picture --------------------------------------------------
 
 private struct SubtitlesLayer: View {
+  let player: PlayerModel
   let clock: PlayerClock
   let idle: Bool
   let size: CGSize
@@ -96,29 +97,40 @@ private struct SubtitlesLayer: View {
       .font(Font(font))
       .lineSpacing(leading)
       .multilineTextAlignment(.center)
+    // Made lines can be fixed: a click on one while paused (or E) makes it a field.
+    let clickToFix = player.canFixLine && !player.playing
     VStack(spacing: 0) {
       Spacer(minLength: 0)
-      if !clock.subs.isEmpty {
-        label
-          .foregroundStyle(.white)
-          .background {
-            // The pages' text-shadow (0 0 6px, 0 0 3px, 0 2px 3px, black). CSS draws each
-            // shadow from the letters alone; stacked .shadow()s would shadow the shadows
-            // too, a hard black outline. A CSS blur of b is a Gaussian of b/2, as .blur's radius.
-            ZStack {
-              label.foregroundStyle(.black).blur(radius: 3)
-              label.foregroundStyle(.black).blur(radius: 1.5)
-              label.foregroundStyle(.black).offset(y: 2).blur(radius: 1.5)
+      if player.editing != nil {
+        LineEditor(player: player, font: font, leading: leading)
+      } else if !clock.subs.isEmpty {
+        // A button (a tap gesture here never fired); while playing, clicks go
+        // through to the picture.
+        Button { player.beginFix() } label: {
+          label
+            .foregroundStyle(.white)
+            .background {
+              // The pages' text-shadow (0 0 6px, 0 0 3px, 0 2px 3px, black). CSS draws each
+              // shadow from the letters alone; stacked .shadow()s would shadow the shadows
+              // too, a hard black outline. A CSS blur of b is a Gaussian of b/2, as .blur's radius.
+              ZStack {
+                label.foregroundStyle(.black).blur(radius: 3)
+                label.foregroundStyle(.black).blur(radius: 1.5)
+                label.foregroundStyle(.black).offset(y: 2).blur(radius: 1.5)
+              }
             }
-          }
-          .fixedSize(horizontal: false, vertical: true)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .buttonStyle(PlainTapStyle())
+        .focusable(false)
+        .help(clickToFix ? "Click to fix this line (E)" : "")
+        .allowsHitTesting(clickToFix)
       }
     }
     .padding(.horizontal, size.width * 0.06)
     .padding(.bottom, (idle ? size.height * 0.07 : PlayerMetrics.aboveBar + 10) + leading / 2)
     .frame(width: size.width, height: size.height)
     .animation(.easeOut(duration: 0.3), value: idle)
-    .allowsHitTesting(false)
   }
 
   /// Avenir Next Demi Bold, sized so its lowercase letters are as tall as the
@@ -135,6 +147,39 @@ private struct SubtitlesLayer: View {
     if run.bold { t = t.bold() }
     if run.underline { t = t.underline() }
     return t
+  }
+}
+
+/// A made line being fixed: a field in the line's place and type. Return saves,
+/// Option-Return starts a new line, Escape cancels (Return and Escape are taken
+/// by PlayerModel.onKey before the field sees them).
+private struct LineEditor: View {
+  let player: PlayerModel
+  let font: NSFont
+  let leading: CGFloat
+  @FocusState private var focused: Bool
+
+  var body: some View {
+    VStack(spacing: 8) {
+      TextField("Line", text: Binding(get: { player.editing?.text ?? "" }, set: { player.setFixText($0) }), axis: .vertical)
+        .textFieldStyle(.plain)
+        .font(Font(font))
+        .lineSpacing(leading)
+        .multilineTextAlignment(.center)
+        .foregroundStyle(.white)
+        .focused($focused)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.black.opacity(0.6)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.accent.opacity(0.8), lineWidth: 1.5))
+        .frame(maxWidth: 900)
+        .fixedSize(horizontal: false, vertical: true)
+      Text("Return saves · ⌥Return new line · Esc cancels · names you correct are learned for this show")
+        .font(.app(.callout))
+        .foregroundStyle(.white.opacity(0.8))
+        .shadow(color: .black, radius: 2)
+    }
+    .onAppear { focused = true }
   }
 }
 

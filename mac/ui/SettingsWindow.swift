@@ -409,12 +409,50 @@ private struct SubtitleSettings: View {
       }
 
       OpenSubtitlesSection()
+      LearnedNamesSection()
     }
   }
 
   private func update(_ patch: SettingsPatch) {
     _ = app.engine.updateSettings(patch)
     app.refresh()
+  }
+}
+
+/// Names learned from fixes to made subtitles, by title; any can be forgotten.
+private struct LearnedNamesSection: View {
+  @Environment(AppModel.self) private var app
+  @State private var learned: [Engine.LearnedNames] = []
+
+  var body: some View {
+    Section {
+      if learned.isEmpty {
+        Note("None yet. To fix a line of subtitles made on this Mac, press E in the player (or click the line while paused). A name you correct is learned for that show.")
+      }
+      ForEach(learned) { t in
+        LabeledContent {
+          Menu("Forget") {
+            ForEach(t.names, id: \.self) { n in
+              Button(n) { forget(n, t) }
+            }
+          }
+          .fixedSize()
+        } label: {
+          Text(t.title)
+          detail(t.names.joined(separator: ", "))
+        }
+      }
+    } header: {
+      header("Names from Your Fixes")
+    } footer: {
+      Note("Subtitles made later spell these names as you wrote them. For an episode of a show, the characters’ names are also looked up on TVmaze; only the show’s name and the episode’s number are sent.")
+    }
+    .task { learned = app.engine.learnedNames() }
+  }
+
+  private func forget(_ name: String, _ t: Engine.LearnedNames) {
+    app.engine.forgetName(name, titleId: t.titleId)
+    learned = app.engine.learnedNames()
   }
 }
 

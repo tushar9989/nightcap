@@ -51,7 +51,8 @@ shows and movies; each title has its own page with seasons and episodes.
   tracks, plus **online search on OpenSubtitles.com** (preferring subtitles
   timed for your exact file), optional automatic download for episodes that
   have none, English subtitles **made on this Mac** from the dialogue (Apple's
-  speech recognition, see below), **sync to the dialogue** done locally,
+  speech recognition, see below; a wrong line can be fixed in the player, and
+  a name you correct is learned for the show), **sync to the dialogue** done locally,
   manual timing nudges, and adverts stripped from subtitle files.
 - **A video player for any file** – Nightcap is in Finder's **Open With**
   menu for video files, takes files dropped on its Dock icon, and has
@@ -187,6 +188,20 @@ It is offered when the audio track playing is English or unlabelled. Made
 subtitles are kept with the downloaded ones and listed as *English · Made on
 this Mac*; the Subtitles menu can remove them.
 
+**Fixing a line.** When a made line is wrong, press **E** in the player (or
+pause and click the line, or Subtitles button → **Fix a line**): playback
+pauses and the line becomes a field. Return saves, ⌥Return starts a second
+line, Esc cancels; saving an empty line takes it out. The fix goes into the
+track and into a log of corrections. A name you correct is learned for the
+show:
+- the same misheard spelling is fixed in the episode's other lines at once
+  (*Boudhaas* → *Budahas* fixes every *Boudhaas*);
+- subtitles made later for any episode of the show expect it, as they expect
+  TVmaze's names.
+
+While the video is open, the Subtitles menu can undo the last fix. **Settings → Subtitles → Names from
+Your Fixes** lists the names learned for each show, and can forget any of them.
+
 Character names from [TVmaze](https://www.tvmaze.com) (CC BY-SA).
 
 ## Your data
@@ -197,7 +212,9 @@ settings), `progress.json` (watch progress), `library.json` (last scan),
 (API key and sign-in token, readable by you only), `trickplay/` (preview
 thumbnails), `stills/` (the frames chosen as pictures), `subs-downloaded/` +
 `subs-downloaded.json`, `subsync.json` (timing corrections), `names.json`
-(names looked up on TVmaze, kept 30 days), `probe.json`,
+(names looked up on TVmaze, kept 30 days, and the names learned from your
+fixes), `subs-corrections.json` (every fix to made subtitles: the line
+before and after), `probe.json`,
 `thumbs/`, `subs/` (caches), `nightcap.log`. Quit Nightcap and delete the
 folder to start fresh. The player's own choices (volume, speed, subtitle
 track and timing nudges, picture) are kept in the app's preferences.
@@ -213,7 +230,8 @@ itself is left as it was. Set `DATA_DIR` to use another folder.
 Space play/pause · ←/→ 10 s (Shift: 30 s) · ↑/↓ volume (to 200%) ·
 `[` / `]` speed −/+ 0.25× (`{` / `}` fine 0.05×, `=` normal) · M mute ·
 F full screen · S skip intro · N next episode · C subtitles · G / H subtitles
-0.1 s earlier / later (Shift: 1 s) · 0–9 jump to 0–90% ·
+0.1 s earlier / later (Shift: 1 s) · E fix a line of made subtitles ·
+0–9 jump to 0–90% ·
 Esc back. In the library: `/` or ⌘F to search · ⌘[ / ⌘] back / forward ·
 ⌃⌘S sidebar · ⇧⌘O add a folder · ⌘, Settings.
 
@@ -238,6 +256,8 @@ mac/
     OpenSubtitles.swift OpenSubtitles.com API client, file hash
     OnlineSubs.swift    search / download / auto-fetch for library videos; keeps made subtitles too
     MadeSubs.swift      subtitles made on this Mac: speech recognition, names, cue rules
+    ShowNames.swift     names to expect in the dialogue: TVmaze's characters, names learned from fixes
+    LineFixes.swift     fixes to made lines: the track, the log, the names they teach
     SubSync.swift       subtitle-to-dialogue sync (speech activity + correlation)
     Subtext.swift       subtitle text: SRT -> WebVTT, advert removal, retiming
     Trickplay.swift     preview thumbnail sheets (seek bar, episode previews)

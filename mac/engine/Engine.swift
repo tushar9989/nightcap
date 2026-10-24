@@ -149,6 +149,7 @@ final class Engine {
   let subsync = SubSync()
   let maker = SubtitleMaker()
   let names = ShowNames()
+  let fixes = JsonStore(Paths.data("subs-corrections.json"), defaults: LineFixLog())
   private(set) var analyzer: Analyzer!
   private(set) var onlineSubs: OnlineSubs!
   private(set) var trickplay: Trickplay!
@@ -224,6 +225,7 @@ final class Engine {
     onlineSubs.flush()
     subsync.flush()
     names.flush()
+    fixes.flush()
     media.flush()
     Children.shared.killAll()
   }
@@ -677,6 +679,80 @@ final class Engine {
       logLine("[subs] making failed for \(f.name): \(error)")
       throw EngineError("Could not make subtitles: \(error.localizedDescription)", 500)
     }
+  }
+
+  /// A fix to a made line, with what undoing it needs.
+  struct FixDone {
+    var fix: LineFix
+    /// The track's text after the fix, and before it.
+    var vtt: String
+    var previous: String
+  }
+
+  /// Fixes the line of made track `trackId` shown from `start` to `end`, which
+  /// read `before`, to `after` (empty: takes it out). Kept in the log; the names
+  /// it corrects are learned for the video's title (LineFixes), and the word
+  /// they replaced is respelt elsewhere in the track.
+  func fixMadeLine(_ fileId: String, _ trackId: String, start: Double, end: Double, before: String, after: String) throws -> FixDone {
+    let f = try file(fileId)
+    guard Engine.downloadedIdRe.test(trackId), let n = Int(trackId.dropFirst()), onlineSubs.isMade(fileId, n),
+      let vtt = onlineSubs.vtt(fileId, n)
+    else { throw EngineError("Only subtitles made on this Mac can be fixed", 400) }
+    let lines = LineFixes.lines(after)
+    guard var out = LineFixes.replace(vtt, start: start, end: end, before: before, with: lines) else {
+      throw EngineError("That line is no longer in these subtitles", 409)
+    }
+    let fixed = lines.joined(separator: "\n")
+    let taught = LineFixes.taught(before: before, after: fixed, known: MadeSubs.dictionaryKnows)
+    var elsewhere = 0
+    for t in taught {
+      guard let heard = t.heard else { continue }
+      let r = LineFixes.respell(out, heard: heard, as: t.name, except: (start, end), known: MadeSubs.dictionaryKnows)
+      out = r.vtt
+      elsewhere += r.cues
+    }
+    try onlineSubs.replaceVtt(fileId, n, out)
+    let learned = titles[f.titleId] == nil ? [] : names.learn(taught.map(\.name), for: f.titleId)
+    let fix = LineFix(
+      file: fileId, video: f.name, track: n, start: start, end: end, before: before, after: fixed, learned: learned,
+      elsewhere: elsewhere, at: nowMs())
+    fixes.data.fixes.append(fix)
+    fixes.save()
+    logLine("[subs] fixed a line of \(f.name) (d\(n))\(learned.isEmpty ? "" : ", learned \(learned.joined(separator: ", "))")"
+      + "\(elsewhere > 0 ? ", \(elsewhere) more line\(elsewhere == 1 ? "" : "s") respelt" : "")")
+    return FixDone(fix: fix, vtt: out, previous: vtt)
+  }
+
+  /// Undoes a fix (the last one made to its track): the track as it was, the
+  /// names it taught forgotten, the fix out of the log. The track's text now.
+  func undoFix(_ done: FixDone) throws -> String {
+    try onlineSubs.replaceVtt(done.fix.file, done.fix.track, done.previous)
+    if !done.fix.learned.isEmpty, let f = try? file(done.fix.file) { names.forget(done.fix.learned, for: f.titleId) }
+    if let i = fixes.data.fixes.lastIndex(of: done.fix) {
+      fixes.data.fixes.remove(at: i)
+      fixes.save()
+    }
+    return done.previous
+  }
+
+  /// Names learned from fixes for one title.
+  struct LearnedNames: Identifiable, Equatable {
+    var titleId: String
+    /// The title's name (its id when it has left the library).
+    var title: String
+    var names: [String]
+    var id: String { titleId }
+  }
+
+  /// The names learned from fixes, by title, titles in name order.
+  func learnedNames() -> [LearnedNames] {
+    names.store.data.learned.filter { !$0.value.isEmpty }
+      .map { LearnedNames(titleId: $0.key, title: titles[$0.key]?.name ?? $0.key, names: $0.value) }
+      .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+  }
+
+  func forgetName(_ name: String, titleId: String) {
+    names.forget([name], for: titleId)
   }
 
   // ---- Artwork ------------------------------------------------------------------------

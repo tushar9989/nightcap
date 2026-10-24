@@ -84,6 +84,16 @@ final class OnlineSubs {
     return String(decoding: data, as: UTF8.self)
   }
 
+  /// Writes a kept track's text anew (a line fixed in a made track).
+  func replaceVtt(_ fileId: String, _ n: Int, _ vtt: String) throws {
+    guard entries(fileId).contains(where: { $0.n == n }) else { throw EngineError("No such subtitle track", 404) }
+    do {
+      try Data(vtt.utf8).write(to: URL(fileURLWithPath: join(dir, fileId, "\(n).vtt")), options: .atomic)
+    } catch {
+      throw EngineError("Could not save the subtitle in \(join(dir, fileId))", 500)
+    }
+  }
+
   @discardableResult
   func remove(_ fileId: String, _ n: Int) -> Bool {
     var list = entries(fileId)

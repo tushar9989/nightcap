@@ -89,6 +89,9 @@ final class PlayerModel {
   private(set) var syncing: String?
   /// How far making subtitles from the dialogue has got, while it runs.
   private(set) var making: String?
+  /// The made line being fixed, and the last fix (the Subtitles menu can undo it).
+  private(set) var editing: LineEdit?
+  private(set) var lastFix: Engine.FixDone?
   var online: OnlineSearch?
   /// The online search field (searched when submitted).
   var onlineQuery = ""
@@ -269,6 +272,8 @@ final class PlayerModel {
     onlineQuery = ""
     syncing = nil
     making = nil
+    editing = nil
+    lastFix = nil
     trick = nil
     trickSheets = [:]
     previewTask?.cancel()
@@ -556,6 +561,7 @@ final class PlayerModel {
   @discardableResult
   func selectSubtitle(_ id: String?, remember: Bool = true) -> Task<Void, Never>? {
     subId = id
+    editing = nil
     subDelay = delayFor(id)
     cues = []
     clock.subs = []
@@ -739,6 +745,87 @@ final class PlayerModel {
     case .audio: return "Reading the audio…"
     case let .listening(f): return "Listening to the dialogue… \(Int(f * 100))%"
     }
+  }
+
+  // ---- Fixing a made line ------------------------------------------------------------------------------
+
+  /// A line of made subtitles being fixed: its cue, its text, and what is typed.
+  struct LineEdit: Equatable {
+    var trackId: String
+    var start: Double
+    var end: Double
+    var before: String
+    var text: String
+  }
+
+  /// The subtitles shown are made on this Mac, so their lines can be fixed.
+  var canFixLine: Bool {
+    guard let subId else { return false }
+    return info?.subtitles.first { $0.id == subId }?.source == "made"
+  }
+
+  /// Fixes the made line on screen, or the last one shown (E, or a click on it
+  /// while paused): playback pauses and the line becomes a field.
+  func beginFix() {
+    guard let id = subId, canFixLine, editing == nil else { return }
+    let t = time - subDelay
+    guard let c = cues.first(where: { $0.start <= t && t < $0.end }) ?? cues.last(where: { $0.start <= t }) else {
+      return osd("No line to fix yet")
+    }
+    pause()
+    let text = c.runs.map(\.text).joined()
+    editing = LineEdit(trackId: id, start: c.start, end: c.end, before: text, text: text)
+  }
+
+  func setFixText(_ text: String) { editing?.text = text }
+
+  func cancelFix() { editing = nil }
+
+  /// Saves the line being fixed (Return): in the track and the log; the names
+  /// it corrects are learned for the show and fixed elsewhere in the track.
+  func saveFix() {
+    guard let e = editing, let fid else { return }
+    editing = nil
+    let flat = { (s: String) in s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+    if flat(e.text) == flat(e.before) { return }
+    do {
+      let done = try app.engine.fixMadeLine(fid, e.trackId, start: e.start, end: e.end, before: e.before, after: e.text)
+      lastFix = done
+      showFixed(e.trackId, done.vtt)
+      win?.toast(PlayerModel.fixedText(done.fix, title: title?.name), ms: 5000)
+    } catch {
+      win?.toast(errorText(error), ms: 5000)
+    }
+  }
+
+  /// Puts the line back as it was before the last fix (and forgets the names it taught).
+  func undoLastFix() {
+    guard let done = lastFix, fid == done.fix.file else { return }
+    do {
+      let vtt = try app.engine.undoFix(done)
+      lastFix = nil
+      showFixed("d\(done.fix.track)", vtt)
+      win?.toast("Fix undone")
+    } catch {
+      win?.toast(errorText(error), ms: 5000)
+    }
+  }
+
+  /// The track's new text on screen at once.
+  private func showFixed(_ trackId: String, _ vtt: String) {
+    guard subId == trackId else { return }
+    cues = Cues.parse(vtt)
+    renderSubs(time)
+  }
+
+  static func fixedText(_ fix: LineFix, title: String?) -> String {
+    var parts = [fix.after.isEmpty ? "Line removed" : "Line fixed"]
+    if !fix.learned.isEmpty {
+      let names = fix.learned.joined(separator: ", ")
+      parts.append(title.map { "\(names) learned for \($0)" } ?? "\(names) learned")
+    }
+    if fix.elsewhere > 0 { parts.append("\(fix.elsewhere) more line\(fix.elsewhere == 1 ? "" : "s") here fixed too") }
+    return parts.joined(separator: " · ")
   }
 
   // ---- Online subtitles (OpenSubtitles.com) ---------------------------------------------------------
@@ -1120,6 +1207,25 @@ final class PlayerModel {
   /// A key pressed while the player is open; true if it was used.
   func onKey(_ e: NSEvent) -> Bool {
     guard fid != nil else { return false }
+    // A line being fixed: Return saves, Escape cancels, Option- or Shift-Return
+    // starts a new line. Done here rather than by its field, where Return stopped
+    // submitting, Escape asks for word completion, and Option-Return did nothing
+    // once the field had no submit action. Keys composing text stay with the field.
+    if editing != nil, [36, 76, 53].contains(e.keyCode) {
+      let field = win?.window?.firstResponder as? NSTextView
+      let mods = e.modifierFlags.intersection([.command, .control, .option, .shift])
+      if field?.hasMarkedText() != true {
+        if e.keyCode == 53 {
+          if mods.isEmpty { cancelFix(); return true }
+        } else if mods.isEmpty {
+          saveFix()
+          return true
+        } else if mods == .option || mods == .shift, let field {
+          field.insertNewlineIgnoringFieldEditor(nil)
+          return true
+        }
+      }
+    }
     if !e.modifierFlags.intersection([.command, .control, .option]).isEmpty { return false }
     if win?.window?.firstResponder is NSText { return false }  // typing in a field
     guard let k = e.characters, let scalar = k.unicodeScalars.first, k.unicodeScalars.count == 1 else { return false }
@@ -1146,6 +1252,7 @@ final class PlayerModel {
     case "s" where skipVisible, "S" where skipVisible: skipIntro()
     case "n" where nextId != nil, "N" where nextId != nil: playNext()
     case "c", "C": toggleSubtitles()
+    case "e" where canFixLine, "E" where canFixLine: beginFix()
     case "\u{1b}":
       if panel != nil {
         closePanel()

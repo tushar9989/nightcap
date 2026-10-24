@@ -322,24 +322,25 @@ private struct SubtitlesColumn: View {
       .padding(.top, 6)
       if track?.source == "made" {
         // Timed from the audio itself: nothing to sync. TVmaze's data asks for credit.
-        HStack(alignment: .firstTextBaseline, spacing: 0) {
-          Group {
-            if track?.release?.hasSuffix("names from TVmaze") == true {
-              Text("Made from the dialogue, names from [TVmaze](https://www.tvmaze.com) ").tint(.primary)
-            } else {
-              Text("Made from the dialogue ")
-            }
+        NoteButton(button: "Remove", action: { player.removeTrack(id) }) {
+          if track?.release?.hasSuffix("names from TVmaze") == true {
+            Text("Made from the dialogue, names from [TVmaze](https://www.tvmaze.com) ").tint(.primary)
+          } else {
+            Text("Made from the dialogue ")
           }
-          .fixedSize(horizontal: false, vertical: true)
-          Button("Remove") { player.removeTrack(id) }
-            .buttonStyle(PlainTapStyle())
-            .underline()
-            .padding(.horizontal, 4)
         }
-        .font(.app(size: 12))
-        .foregroundStyle(Theme.text2)
-        .frame(width: 220, alignment: .leading)
         .padding(.top, 8)
+        PanelButton(label: "Fix a line (E)", help: "Correct the line on screen; names you correct are learned for this show", full: true) {
+          player.closePanel()
+          player.beginFix()
+        }
+        .padding(.top, 8)
+        if let done = player.lastFix, done.fix.file == player.fid, "d\(done.fix.track)" == id {
+          NoteButton(button: "Undo", action: { player.undoLastFix() }) {
+            Text("\(PlayerModel.fixedText(done.fix, title: nil)) ")
+          }
+          .padding(.top, 6)
+        }
       } else {
         PanelButton(
           label: player.syncing == id ? "Listening to the dialogue…" : "Sync to dialogue",
@@ -351,22 +352,46 @@ private struct SubtitlesColumn: View {
         .padding(.top, 8)
       }
       if let sync = track?.sync {
-        HStack(alignment: .firstTextBaseline, spacing: 0) {
-          Text("Synced: \(describeSync(sync)) ").fixedSize(horizontal: false, vertical: true)
-          Button("Undo") { player.undoSync() }
-            .buttonStyle(PlainTapStyle())
-            .underline()
-            .padding(.horizontal, 4)
+        NoteButton(button: "Undo", action: { player.undoSync() }) {
+          Text("Synced: \(describeSync(sync)) ")
         }
-        .font(.app(size: 12))
-        .foregroundStyle(Theme.text2)
-        .frame(width: 220, alignment: .leading)
         .padding(.top, 6)
       }
     }
     .padding(.top, 10)
     .overlay(alignment: .top) { panelLine.frame(height: 1) }
     .padding(.top, 10)
+  }
+}
+
+/// Small print with a quiet button after it (Remove, Undo): on the same line
+/// when both fit, else under the text (after the first of two lines it read as
+/// part of the sentence).
+private struct NoteButton<Note: View>: View {
+  let button: String
+  let action: () -> Void
+  @ViewBuilder let note: Note
+
+  var body: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(alignment: .firstTextBaseline, spacing: 0) {
+        note.fixedSize()
+        tap.padding(.horizontal, 4)
+      }
+      VStack(alignment: .leading, spacing: 2) {
+        note.fixedSize(horizontal: false, vertical: true)
+        tap
+      }
+    }
+    .font(.app(size: 12))
+    .foregroundStyle(Theme.text2)
+    .frame(width: 220, alignment: .leading)
+  }
+
+  private var tap: some View {
+    Button(button, action: action)
+      .buttonStyle(PlainTapStyle())
+      .underline()
   }
 }
 
