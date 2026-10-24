@@ -2,7 +2,7 @@ import Foundation
 
 // The player's choices, remembered for every window (the pages kept them in
 // localStorage): volume, mute, speed, audio language, the subtitles last
-// chosen, and each video's subtitle timing nudges.
+// chosen, each video's subtitle timing nudges, and the picture.
 @MainActor
 enum Prefs {
   private static let d = UserDefaults.standard
@@ -45,6 +45,16 @@ enum Prefs {
   static var lastSubLabel: String {
     get { d.string(forKey: "lastSubLabel") ?? "" }
     set { d.set(newValue, forKey: "lastSubLabel") }
+  }
+
+  /// How the picture is shown. Settings reads and writes the same key (players
+  /// follow it through UserDefaults.didChangeNotification).
+  static let pictureKey = "picture"
+  static let defaultPicture = PictureMode.sharper
+
+  static var picture: PictureMode {
+    get { d.string(forKey: pictureKey).flatMap(PictureMode.init(rawValue:)) ?? defaultPicture }
+    set { d.set(newValue.rawValue, forKey: pictureKey) }
   }
 
   // ---- Subtitle timing, per video and track ("<fileId>:<subId>"), the latest 300 -----------

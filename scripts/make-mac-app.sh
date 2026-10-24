@@ -172,8 +172,8 @@ cat >"$C/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Nightcap</string>
   <key>CFBundleDisplayName</key><string>Nightcap</string>
   <key>CFBundleIdentifier</key><string>local.nightcap.app</string>
-  <key>CFBundleVersion</key><string>7</string>
-  <key>CFBundleShortVersionString</key><string>0.5.2</string>
+  <key>CFBundleVersion</key><string>8</string>
+  <key>CFBundleShortVersionString</key><string>0.6.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>Nightcap</string>
   <key>CFBundleIconFile</key><string>Nightcap</string>

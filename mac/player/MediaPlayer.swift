@@ -53,6 +53,16 @@ final class MediaPlayer: @unchecked Sendable {
   var isMuted = false {
     didSet { audioRenderer.isMuted = isMuted }
   }
+  /// How the picture is shown: as decoded, or doubled by Apple's super resolution.
+  var picture: PictureMode = .original {
+    didSet { send { $0.picture = self.picture } }
+  }
+  /// What `picture` does to this video, once a frame has shown it (main thread).
+  private(set) var pictureStatus: Upscaler.Status = .off
+  var onPicture: ((Upscaler.Status) -> Void)?
+  /// The setting the latest frames were made in, and the time they start at (main thread).
+  private var pictureShown: PictureMode?
+  private var pictureFrom = 0.0
 
   // Shared with the pump thread, under `cond`.
   private struct Commands {
@@ -63,6 +73,7 @@ final class MediaPlayer: @unchecked Sendable {
     var playing = false
     var rate: Float = 1
     var gain: Float = 1
+    var picture = PictureMode.original
     var closing = false
     var changed = false
   }
@@ -137,6 +148,12 @@ final class MediaPlayer: @unchecked Sendable {
   func pause() {
     isPlaying = false
     send { $0.playing = false }
+    // A picture from before the scaler was ready, or before the setting
+    // changed, is shown again as chosen (a paused landing waits for the scaler).
+    let t = currentTime
+    if info?.hasVideo == true && !ended && (pictureStatus == .starting || pictureShown != picture || t < pictureFrom) {
+      seek(to: t)
+    }
   }
 
   func seek(to time: Double, exact: Bool = true) {
@@ -218,6 +235,9 @@ final class MediaPlayer: @unchecked Sendable {
   private var audioFormat: CMAudioFormatDescription?
   private var audioFormatRate = 0
   private var lastSar = (0, 0)
+  private let upscaler = Upscaler()
+  private var reportedPicture: Upscaler.Status?
+  private var reportedMode: PictureMode?
   /// Audio already handed to the renderer, unboosted, so a volume change above
   /// 100% can be applied to it at once.
   private var sentAudio: [(pts: Double, rate: Int, samples: [Float])] = []
@@ -253,7 +273,7 @@ final class MediaPlayer: @unchecked Sendable {
       // While a seek lands: the first picture, then enough sound to start.
       if hasVideo && !videoDone && videoRenderer.isReadyForMoreMediaData
         && (landing ? !gotVideo : videoEnd < now + 0.5 * speed) {
-        pushVideo(now: now)
+        pushVideo(now: now, picture: c.picture, paused: !c.playing)
         worked = true
       }
       if hasAudio && !audioDone && (!landing || gotVideo || videoDone) && audioRenderer.isReadyForMoreMediaData
@@ -268,6 +288,7 @@ final class MediaPlayer: @unchecked Sendable {
     synchronizer.rate = 0
     videoRenderer.flush()
     audioRenderer.flush()
+    upscaler.close()
     if let d = dec { nc_close(d) }
     dec = nil
   }
@@ -311,6 +332,8 @@ final class MediaPlayer: @unchecked Sendable {
     videoFormat = nil
     audioFormat = nil
     lastSar = (0, 0)
+    reportedPicture = nil
+    reportedMode = nil
     refreshInfo(audioIndex: nil)
   }
 
@@ -402,7 +425,7 @@ final class MediaPlayer: @unchecked Sendable {
     main { self.onSeeked?(landed) }
   }
 
-  private func pushVideo(now: Double) {
+  private func pushVideo(now: Double, picture: PictureMode, paused: Bool) {
     guard let d = dec else { return }
     var f = NCVideoFrame()
     let r = nc_next_video(d, &f)
@@ -439,9 +462,25 @@ final class MediaPlayer: @unchecked Sendable {
         }
       }
     }
-    if videoFormat == nil || !CMVideoFormatDescriptionMatchesImageBuffer(videoFormat!, imageBuffer: pb) {
+    // A paused picture shown again in another mode waits for the scaler to start.
+    let (shown, status) = upscaler.process(pb, mode: picture, wait: landing && paused)
+    // From which frame the picture is shown this way (after a seek, from its first).
+    if status != reportedPicture || picture != reportedMode || landing {
+      reportedPicture = status
+      reportedMode = picture
+      let from = landing ? start : f.pts
+      main {
+        self.pictureShown = picture
+        self.pictureFrom = from
+        if status != self.pictureStatus {
+          self.pictureStatus = status
+          self.onPicture?(status)
+        }
+      }
+    }
+    if videoFormat == nil || !CMVideoFormatDescriptionMatchesImageBuffer(videoFormat!, imageBuffer: shown) {
       videoFormat = nil
-      CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: pb, formatDescriptionOut: &videoFormat)
+      CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: shown, formatDescriptionOut: &videoFormat)
     }
     guard let format = videoFormat else { return }
     var timing = CMSampleTimingInfo(
@@ -450,7 +489,7 @@ final class MediaPlayer: @unchecked Sendable {
       decodeTimeStamp: .invalid)
     var sample: CMSampleBuffer?
     CMSampleBufferCreateReadyWithImageBuffer(
-      allocator: nil, imageBuffer: pb, formatDescription: format, sampleTiming: &timing, sampleBufferOut: &sample)
+      allocator: nil, imageBuffer: shown, formatDescription: format, sampleTiming: &timing, sampleBufferOut: &sample)
     if let sample { videoRenderer.enqueue(sample) }
     videoEnd = f.pts + f.duration
   }

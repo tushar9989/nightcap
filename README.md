@@ -38,6 +38,12 @@ shows and movies; each title has its own page with seasons and episodes.
   and resting on Episodes, Speed or Subtitles opens that menu (a click keeps
   it open).
   Made locally from keyframes, about a second and 2 MB per episode.
+- **A sharper picture** – standard-definition video (DVD rips, up to 960
+  pixels a side) is doubled as it plays by Apple's super resolution, built
+  into macOS 26 (VideoToolbox's low-latency scaler, about 1.5 ms a frame on an
+  M1 Pro), optionally with light sharpening. **Settings → Playback → Picture**
+  or the player's Subtitles button menu: Original, Sharper (the default), or
+  Sharper + sharpening.
 - **Volume up to 200%** (like VLC), with a limiter so boosted audio doesn't clip harshly.
 - **Playback speed 0.25×–3×** with pitch-corrected voices, remembered across
   episodes; the speed button shows when you are not at 1×.
@@ -151,7 +157,7 @@ thumbnails), `stills/` (the frames chosen as pictures), `subs-downloaded/` +
 `subs-downloaded.json`, `subsync.json` (timing corrections), `probe.json`,
 `thumbs/`, `subs/` (caches), `nightcap.log`. Quit Nightcap and delete the
 folder to start fresh. The player's own choices (volume, speed, subtitle
-track and timing nudges) are kept in the app's preferences.
+track and timing nudges, picture) are kept in the app's preferences.
 
 Earlier versions (a Node engine) kept the same files in this repository's
 `data/` folder (ignored by git). The first launch of the app copies them over
@@ -198,6 +204,7 @@ mac/
   player/
     ncdecoder.c         ffmpeg's libraries: open, seek, decode video (VideoToolbox for HD) and audio
     MediaPlayer.swift   macOS sample-buffer renderers on one clock; speed, volume boost, audio tracks
+    Upscaler.swift      the picture setting: Apple's 2x super resolution (+ sharpening on Metal)
   ui/
     main.swift          the app: windows, menus, files from Finder, quitting, carrying over the earlier data
     AppModel.swift      the engine's state for the windows; what plays next, Watching

@@ -311,6 +311,7 @@ private struct PreviewsProgress: View {
 
 private struct PlaybackSettings: View {
   @Environment(AppModel.self) private var app
+  @AppStorage(Prefs.pictureKey) private var picture = Prefs.defaultPicture
 
   static let keys: [(String, String)] = [
     ("Play or pause", "Space"),
@@ -351,6 +352,17 @@ private struct PlaybackSettings: View {
         .disabled(!s.autoplayNext)
       } header: {
         header("Episodes")
+      }
+
+      Section {
+        Picker(selection: $picture) {
+          ForEach(PictureMode.allCases, id: \.self) { Text($0.label).tag($0) }
+        } label: {
+          Text("Quality")
+          detail("Sharper doubles standard-definition video with Apple’s super resolution as it plays, on this Mac. Sharpening adds bite, and some grain.")
+        }
+      } header: {
+        header("Picture")
       }
 
       Section {

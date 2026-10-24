@@ -5,8 +5,8 @@ import Observation
 // The player: one MediaPlayer for as long as the player is open (the next
 // episode opens in it), resume, Skip Intro, the Next Episode card, subtitles
 // (with online search, timing nudges and sync to the dialogue), audio tracks,
-// volume up to 200%, speed, and the keys. As the earlier web player did it
-// (public/player.js, in the git history).
+// volume up to 200%, speed, and the keys, as the earlier web player did them
+// (public/player.js, in the git history); and the picture (Upscaler.swift).
 
 enum PlayerPanel: Equatable {
   case settings, online, speed, episodes
@@ -78,6 +78,9 @@ final class PlayerModel {
   private(set) var volume: Double
   private(set) var muted: Bool
   private(set) var speed: Double
+  /// How the picture is shown (Prefs.picture), and what that does to this video.
+  private(set) var picture: PictureMode
+  private(set) var pictureStatus: Upscaler.Status = .off
   /// The audio track: the n-th audio stream (the order of probe.audio).
   private(set) var audio = 0
   private(set) var subId: String?
@@ -126,6 +129,7 @@ final class PlayerModel {
   @ObservationIgnored private var previewTask: Task<Void, Never>?
   @ObservationIgnored private var hoverTimers: [PopupButton: Task<Void, Never>] = [:]
   @ObservationIgnored private var sleepAssertion: IOPMAssertionID = 0
+  @ObservationIgnored private var defaultsObserver: NSObjectProtocol?
 
   init(app: AppModel, win: WindowModel) {
     self.app = app
@@ -133,20 +137,29 @@ final class PlayerModel {
     volume = Prefs.volume
     muted = Prefs.muted
     speed = Prefs.speed
+    picture = Prefs.picture
     surface = PlayerSurface(player: mp)
     mp.rate = Float(speed)
+    mp.picture = picture
     applyVolume()
     mp.onOpen = { [weak self] info in self?.opened(info) }
     mp.onSeeked = { [weak self] _ in self?.seeked() }
     mp.onEnded = { [weak self] in self?.ended() }
     mp.onError = { [weak self] message in self?.failed(message) }
     mp.onAspect = { [weak self] _ in self?.surface.needsLayout = true }
+    mp.onPicture = { [weak self] status in self?.pictureStatus = status }
     surface.onClick = { [weak self] count in self?.surfaceClicked(count) }
     let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
       MainActor.assumeIsolated { self?.tick() }
     }
     RunLoop.main.add(t, forMode: .common)
     timer = t
+    // The picture setting can change in Settings or in another window's player.
+    defaultsObserver = NotificationCenter.default.addObserver(
+      forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated { self?.followPicture() }
+    }
     // The keys go to the player, not to a search field left focused under it.
     win.window?.makeFirstResponder(nil)
   }
@@ -217,6 +230,8 @@ final class PlayerModel {
 
   /// Called by the window when the player goes away.
   func close() {
+    if let o = defaultsObserver { NotificationCenter.default.removeObserver(o) }
+    defaultsObserver = nil
     guard fid != nil else { return }
     saveProgress()
     mp.close()
@@ -766,6 +781,24 @@ final class PlayerModel {
         win?.toast(errorText(error))
       }
     }
+  }
+
+  // ---- Picture ------------------------------------------------------------------------------------
+
+  /// Chooses how the picture is shown, in every player (the others follow Prefs).
+  func choosePicture(_ m: PictureMode) {
+    Prefs.picture = m
+    followPicture()
+  }
+
+  /// Takes up the picture setting when it changed. Playing, the new picture
+  /// follows the half second already queued; paused, the frame is shown again.
+  private func followPicture() {
+    let m = Prefs.picture
+    guard m != picture else { return }
+    picture = m
+    mp.picture = m
+    if started && landed && failure == nil && !mp.isPlaying && !mp.ended && !mp.isSeeking { seek(time) }
   }
 
   // ---- Audio --------------------------------------------------------------------------------------

@@ -1,10 +1,10 @@
 import AppKit
 import SwiftUI
 
-// The player's panels, opened from the controls: audio, subtitles and the
-// intro and credits markers; subtitles online (OpenSubtitles.com); speed; and
-// the episodes. They sit on glass above the controls on the right, at most as
-// tall as the window allows.
+// The player's panels, opened from the controls: audio, subtitles, the
+// picture and the intro and credits markers; subtitles online
+// (OpenSubtitles.com); speed; and the episodes. They sit on glass above the
+// controls on the right, at most as tall as the window allows.
 
 /// Lines between a panel's parts.
 private let panelLine = Color.white.opacity(0.12)
@@ -241,6 +241,10 @@ private struct SettingsPanel: View {
       }
       SubtitlesColumn(player: player)
       panelLine.layoutValue(key: ColumnSeparator.self, value: true)
+      if player.mediaInfo?.hasVideo != false {
+        PictureColumn(player: player)
+        panelLine.layoutValue(key: ColumnSeparator.self, value: true)
+      }
       MarkersColumn(player: player)
         .layoutValue(key: ColumnMinWidth.self, value: 240)
     }
@@ -318,6 +322,43 @@ private struct SubtitlesColumn: View {
     .padding(.top, 10)
     .overlay(alignment: .top) { panelLine.frame(height: 1) }
     .padding(.top, 10)
+  }
+}
+
+/// Original, or doubled by Apple's super resolution (and sharpened), with what that does here.
+private struct PictureColumn: View {
+  let player: PlayerModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      PanelHeading(text: "Picture")
+      ForEach(PictureMode.allCases, id: \.self) { m in
+        PanelOption(label: m.label, on: m == player.picture) { player.choosePicture(m) }
+      }
+      if let note {
+        Text(note)
+          .font(.app(size: 12))
+          .foregroundStyle(Theme.text2)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(width: 190, alignment: .leading)
+          .padding(.top, 8)
+      }
+    }
+    .padding(.vertical, 18)
+    .padding(.horizontal, 20)
+  }
+
+  private var note: String? {
+    guard let m = player.mediaInfo, m.width > 0, m.height > 0 else { return nil }
+    // A size never breaks across lines.
+    func dims(_ w: Int, _ h: Int) -> String { "\(w)\u{00A0}×\u{00A0}\(h)" }
+    let size = dims(m.width, m.height)
+    switch player.pictureStatus {
+    case .off: return player.picture == .original ? "\(size), as recorded" : nil
+    case .starting: return nil
+    case let .doubled(w, h): return player.picture == .original ? nil : "\(size) doubled to \(dims(w, h)) by Apple’s super resolution"
+    case let .unavailable(why): return player.picture == .original ? nil : why
+    }
   }
 }
 
