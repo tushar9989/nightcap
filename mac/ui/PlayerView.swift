@@ -125,6 +125,23 @@ private struct SubtitlesLayer: View {
         .focusable(false)
         .help(clickToFix ? "Click to fix this line (E)" : "")
         .allowsHitTesting(clickToFix)
+        // Paused: the lines either side, in the gap under the line. (An overlay ignores an
+        // alignment guide on content inside an `if`: a frame of no height hangs it below.)
+        .overlay(alignment: .bottom) {
+          if clickToFix {
+            LineSteps(player: player).frame(height: 0, alignment: .top).offset(y: 5)
+          }
+        }
+      } else if clickToFix {
+        // Paused between lines: back to the last one, to fix it.
+        Button { player.showLine(-1) } label: {
+          Label("Back to the last line", systemImage: "arrow.uturn.backward")
+            .font(.app(.body, weight: .semibold))
+            .padding(.horizontal, 4)
+        }
+        .buttonStyle(.glass)
+        .controlSize(.large)
+        .help("Shows the last line, paused, to fix it (E)")
       }
     }
     .padding(.horizontal, size.width * 0.06)
@@ -147,6 +164,26 @@ private struct SubtitlesLayer: View {
     if run.bold { t = t.bold() }
     if run.underline { t = t.underline() }
     return t
+  }
+}
+
+/// Paused on a made line: the lines either side, and how to fix this one.
+private struct LineSteps: View {
+  let player: PlayerModel
+
+  var body: some View {
+    HStack(spacing: 18) {
+      Button("‹ Line before") { player.showLine(-1) }
+        .underline()
+      Text("Click the line to fix it (E)")
+      Button("Line after ›") { player.showLine(1) }
+        .underline()
+    }
+    .buttonStyle(PlainTapStyle())
+    .font(.app(.callout))
+    .foregroundStyle(.white.opacity(0.85))
+    .shadow(color: .black, radius: 2)
+    .fixedSize()
   }
 }
 

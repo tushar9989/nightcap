@@ -145,7 +145,8 @@ final class WindowModel {
     } else {
       if searchFocused { blurSearchToken += 1 }
       let p = PlayerModel(app: app, win: self)
-      player = p
+      // Fades in; it leaves at once (closePlayer).
+      withAnimation(.easeOut(duration: 0.2)) { player = p }
       p.open(fid, start: start)
       // The player covers the window; the toolbar would float over it.
       Task { @MainActor [weak self] in
@@ -159,7 +160,12 @@ final class WindowModel {
   func closePlayer() {
     guard let p = player else { return }
     p.close()
-    player = nil
+    // Gone at once, with no animation even inside someone's withAnimation: a view leaving with
+    // an animation stays until the animation ends, and when one never ended, the closed player
+    // (clear by then) stayed over the window and took every click until the app was restarted.
+    var now = Transaction()
+    now.disablesAnimations = true
+    withTransaction(now) { player = nil }
     window?.toolbar?.isVisible = true
     updateTitle()
   }
@@ -362,7 +368,6 @@ struct WindowRoot: View {
       }
     }
     .overlay { ToastView().ignoresSafeArea() }
-    .animation(.easeOut(duration: 0.2), value: win.player == nil)
     .onChange(of: searchFocused) { _, focused in win.searchFocused = focused }
     .onChange(of: win.focusSearchToken) { searchFocused = true }
     .onChange(of: win.blurSearchToken) { searchFocused = false }

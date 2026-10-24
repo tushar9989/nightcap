@@ -191,7 +191,10 @@ this Mac*; the Subtitles menu can remove them.
 **Fixing a line.** When a made line is wrong, press **E** in the player (or
 pause and click the line, or Subtitles button → **Fix a line**): playback
 pauses and the line becomes a field. Return saves, ⌥Return starts a second
-line, Esc cancels; saving an empty line takes it out. The fix goes into the
+line, Esc cancels; saving an empty line takes it out. Paused after the line
+has gone, **Back to the last line** (in its place) brings it back, as E
+does; under a paused line, **Line before** and **Line after** step through
+the lines. The fix goes into the
 track and into a log of corrections. A name you correct is learned for the
 show:
 - the same misheard spelling is fixed in the episode's other lines at once

@@ -235,6 +235,8 @@ final class PlayerModel {
 
   /// Called by the window when the player goes away.
   func close() {
+    // The picture takes no more clicks, even if its view outlives the player.
+    surface.isHidden = true
     if let o = defaultsObserver { NotificationCenter.default.removeObserver(o) }
     defaultsObserver = nil
     guard fid != nil else { return }
@@ -769,12 +771,29 @@ final class PlayerModel {
   func beginFix() {
     guard let id = subId, canFixLine, editing == nil else { return }
     let t = time - subDelay
-    guard let c = cues.first(where: { $0.start <= t && t < $0.end }) ?? cues.last(where: { $0.start <= t }) else {
-      return osd("No line to fix yet")
-    }
+    let onScreen = cues.first { $0.start <= t && t < $0.end }
+    guard let c = onScreen ?? cues.last(where: { $0.start <= t }) else { return osd("No line to fix yet") }
     pause()
+    // The last line, when none is on screen: the picture goes back to it too.
+    if onScreen == nil { seek(c.start + subDelay + 0.05) }
     let text = c.runs.map(\.text).joined()
     editing = LineEdit(trackId: id, start: c.start, end: c.end, before: text, text: text)
+  }
+
+  /// Shows a made line, paused, to fix it: the one before (-1) or after (+1) the
+  /// line on screen, or, when none is, the last one shown or the next to come.
+  func showLine(_ step: Int) {
+    guard canFixLine, editing == nil else { return }
+    let t = time - subDelay
+    let i: Int?
+    if let on = cues.firstIndex(where: { $0.start <= t && t < $0.end }) {
+      i = on + step
+    } else {
+      i = step < 0 ? cues.lastIndex { $0.start <= t } : cues.firstIndex { $0.start > t }
+    }
+    guard let i, cues.indices.contains(i) else { return osd(step < 0 ? "No line before" : "No line after") }
+    pause()
+    seek(cues[i].start + subDelay + 0.05)
   }
 
   func setFixText(_ text: String) { editing?.text = text }
