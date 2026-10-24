@@ -148,6 +148,7 @@ final class Engine {
   let media = Media()
   let subsync = SubSync()
   let maker = SubtitleMaker()
+  let names = ShowNames()
   private(set) var analyzer: Analyzer!
   private(set) var onlineSubs: OnlineSubs!
   private(set) var trickplay: Trickplay!
@@ -222,6 +223,7 @@ final class Engine {
     analyzer.flush()
     onlineSubs.flush()
     subsync.flush()
+    names.flush()
     media.flush()
     Children.shared.killAll()
   }
@@ -654,12 +656,15 @@ final class Engine {
 
   /// Makes English subtitles from the dialogue of audio track `audio` (MadeSubs):
   /// about 30 s for a 45-minute episode. Timed from the audio itself, so never synced.
+  /// The names to expect (ShowNames) are looked up while the dialogue is heard.
   func makeSubtitles(_ fileId: String, audio: Int = 0, progress: @escaping @MainActor (MadeSubs.Step) -> Void) async throws -> SubtitleTrack {
     let f = try file(fileId)
     let audio = max(0, audio)
+    let (title, episode) = onlineSubs.describe(f)
+    let lookup = Task { await names.names(for: f, title: title, episode: episode, known: MadeSubs.dictionaryKnows) }
     do {
-      return try await maker.make(f, audio: audio, progress: progress) { vtt in
-        guard let track = try self.onlineSubs.addMade(f, vtt, audio: audio) else {
+      return try await maker.make(f, audio: audio, names: { await lookup.value }, progress: progress) { vtt, found in
+        guard let track = try self.onlineSubs.addMade(f, vtt, audio: audio, namesFrom: found.fromTVmaze ? "TVmaze" : nil) else {
           throw EngineError("Could not keep the subtitles", 500)
         }
         return track

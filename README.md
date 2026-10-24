@@ -152,16 +152,23 @@ Subtitles provided by [OpenSubtitles.com](https://www.opensubtitles.com).
 
 For a video with no subtitles, or none that fit, **Subtitles button → Make
 subtitles on this Mac** writes English subtitles from the dialogue of the
-audio track playing. Nothing leaves the Mac:
+audio track playing. The dialogue never leaves the Mac:
 
 - Apple's speech recognition (SpeechTranscriber, built into macOS 26) hears
   the words and when each is said. If macOS doesn't have its English speech
   model yet, it fetches it first; the menu shows how far it has got.
 - Each name's spellings are made one: the recogniser spells an unfamiliar name
   several ways (Mulder, Molder, Maldo…), and the most common spelling is used.
+- For an episode of a show, the names to expect are looked up on
+  [TVmaze](https://www.tvmaze.com), a free TV database (only the show's name
+  and the season and episode numbers are sent): the show's characters, the
+  episode's guest characters and the names in its summary. A name heard that
+  is nearly one of them is spelt as it is written there (Boudhaas, Buddhaas →
+  Budahas). Telling the recogniser the names beforehand changes nothing (it
+  ignores them), so they are applied right after it has heard the episode.
 - The words become cues the way subtitle style guides ask:
   - one sentence to a cue, a long one broken at a comma, a pause or before a
-    conjunction
+    conjunction (a title's full stop, as in *Mrs. Budahas*, doesn't end one)
   - at most two lines of 42 characters, and 7 seconds
   - fillers (uh, um) left out
   - a quick exchange shares a two-line cue (speakers aren't told apart, so
@@ -172,10 +179,15 @@ subtitles of three X-Files episodes:
 - 88–94 % of the words were found.
 - 98.5–99.8 % of those words were shown within half a second of the published
   timing.
+- The names the dictionary doesn't know were spelt right 90 % of the time in
+  *Deep Throat* with TVmaze's names (48 % without them), 77 % in *The Jersey
+  Devil* (73 %); *Conduit*'s are mostly places TVmaze doesn't list (44 % either way).
 
 It is offered when the audio track playing is English or unlabelled. Made
 subtitles are kept with the downloaded ones and listed as *English · Made on
 this Mac*; the Subtitles menu can remove them.
+
+Character names from [TVmaze](https://www.tvmaze.com) (CC BY-SA).
 
 ## Your data
 
@@ -184,7 +196,8 @@ settings), `progress.json` (watch progress), `library.json` (last scan),
 `analysis.json` + `fingerprints/` (detection index), `opensubtitles.json`
 (API key and sign-in token, readable by you only), `trickplay/` (preview
 thumbnails), `stills/` (the frames chosen as pictures), `subs-downloaded/` +
-`subs-downloaded.json`, `subsync.json` (timing corrections), `probe.json`,
+`subs-downloaded.json`, `subsync.json` (timing corrections), `names.json`
+(names looked up on TVmaze, kept 30 days), `probe.json`,
 `thumbs/`, `subs/` (caches), `nightcap.log`. Quit Nightcap and delete the
 folder to start fresh. The player's own choices (volume, speed, subtitle
 track and timing nudges, picture) are kept in the app's preferences.

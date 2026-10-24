@@ -321,9 +321,16 @@ private struct SubtitlesColumn: View {
       }
       .padding(.top, 6)
       if track?.source == "made" {
-        // Timed from the audio itself: nothing to sync.
+        // Timed from the audio itself: nothing to sync. TVmaze's data asks for credit.
         HStack(alignment: .firstTextBaseline, spacing: 0) {
-          Text("Made from the dialogue ").fixedSize(horizontal: false, vertical: true)
+          Group {
+            if track?.release?.hasSuffix("names from TVmaze") == true {
+              Text("Made from the dialogue, names from [TVmaze](https://www.tvmaze.com) ").tint(.primary)
+            } else {
+              Text("Made from the dialogue ")
+            }
+          }
+          .fixedSize(horizontal: false, vertical: true)
           Button("Remove") { player.removeTrack(id) }
             .buttonStyle(PlainTapStyle())
             .underline()

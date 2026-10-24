@@ -5,14 +5,19 @@ import Speech
 
 // English subtitles made on this Mac from a video's dialogue. Apple's speech
 // recogniser (SpeechTranscriber, on device) hears the words and when each is
-// said; each name's spellings are made one; the words become cues the way
-// subtitle style guides ask. About 30 s for a 45-minute episode. Kept with the
-// downloaded subtitles (OnlineSubs), as provider "nightcap".
+// said; each name's spellings are made one, spelt as written where the name is
+// expected (ShowNames: the episode's characters from TVmaze, names the user
+// taught); the words become cues the way subtitle style guides ask. About 30 s
+// for a 45-minute episode. Kept with the downloaded subtitles (OnlineSubs), as
+// provider "nightcap".
 //
 // Measured on three X-Files episodes against their published subtitles: 88-94 %
 // of the words found, 98.5-99.8 % of them shown within half a second of when
 // the published cue shows them. A local language model correcting the text was
-// tried and dropped: about half its changes were wrong.
+// tried and dropped: about half its changes were wrong. Telling the recogniser
+// the names (contextual strings) changed nothing: SpeechTranscriber ignores them.
+// With TVmaze's names, the names the dictionary doesn't know were heard right
+// 48 -> 90 % (Deep Throat), 73 -> 77 % (The Jersey Devil), 44 -> 44 % (Conduit).
 
 enum MadeSubs {
   /// A word as heard, with its punctuation, from `s` to `e` seconds.
@@ -124,7 +129,11 @@ enum MadeSubs {
   /// dictionary), and each group takes its most central spelling: the least
   /// distance from all those heard, counted by times heard. `known` says
   /// whether the dictionary knows a word.
-  static func settleNames(_ segments: [[Word]], known: (String) -> Bool) -> [[Word]] {
+  ///
+  /// `names` are names expected in the dialogue (ShowNames: the characters, the
+  /// names the user taught). A spelling heard that is nearly one of them
+  /// becomes it (`nameFor`), and so does the rest of its group.
+  static func settleNames(_ segments: [[Word]], known: (String) -> Bool, names: [String] = []) -> [[Word]] {
     let caps = capitalised(segments, known: known)
     var group = Array(caps.indices)
     func root(_ i: Int) -> Int {
@@ -137,11 +146,25 @@ enum MadeSubs {
     }
     var byRoot: [Int: [(String, Int)]] = [:]
     for i in caps.indices { byRoot[root(i), default: []].append(caps[i]) }
+    let expected = names.filter { isNameTarget($0) && !known($0) }
     var map: [String: String] = [:]
-    for g in byRoot.values where g.count >= 2 && g.contains(where: { !known($0.0) }) {
-      func cost(_ a: String) -> Double { g.reduce(0) { $0 + Double($1.1) * distance(a, $1.0) } }
-      let to = g.min { cost($0.0) != cost($1.0) ? cost($0.0) < cost($1.0) : $0.1 > $1.1 }!.0
-      for (from, _) in g where from != to { map[from] = to }
+    for g in byRoot.values {
+      // The names its spellings are nearly (a spelling that is a name is that name).
+      var to: [String: String] = [:]
+      for (s, _) in g {
+        if let n = expected.first(where: { $0.lowercased() == s.lowercased() }) ?? nameFor(s, in: expected) { to[s] = n }
+      }
+      let targets = Set(to.values)
+      if targets.count == 1, let n = targets.first {
+        for (from, _) in g where from != n && !isTitle(from) { map[from] = n }
+      } else if !targets.isEmpty {
+        // Two names in one group: each spelling to its own.
+        for (from, n) in to where from != n { map[from] = n }
+      } else if g.count >= 2 && g.contains(where: { !known($0.0) }) {
+        func cost(_ a: String) -> Double { g.reduce(0) { $0 + Double($1.1) * distance(a, $1.0) } }
+        let to = g.min { cost($0.0) != cost($1.0) ? cost($0.0) < cost($1.0) : $0.1 > $1.1 }!.0
+        for (from, _) in g where from != to { map[from] = to }
+      }
     }
     if map.isEmpty { return segments }
     return segments.map { ws in
@@ -189,11 +212,15 @@ enum MadeSubs {
     return (String(ch[..<a]), core, post)
   }
 
-  /// How far apart two spellings are, 0 (same letters) to 1.
+  /// How far apart two spellings are, 0 (same letters) to 1. Accents don't count (Brulé, Brule).
   static func distance(_ a: String, _ b: String) -> Double {
-    func letters(_ s: String) -> [Character] { Array(s.lowercased().filter { $0.isLetter || $0.isNumber }) }
     let x = letters(a), y = letters(b)
     return Double(levenshtein(x, y)) / Double(max(1, max(x.count, y.count)))
+  }
+
+  /// A word's letters and digits, lower case, without accents.
+  static func letters(_ s: String) -> [Character] {
+    Array(s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased().filter { $0.isLetter || $0.isNumber })
   }
 
   static func levenshtein(_ x: [Character], _ y: [Character]) -> Int {
@@ -209,8 +236,38 @@ enum MadeSubs {
 
   /// Two spellings of one name: the same first letter and most letters the same.
   static func sameName(_ a: String, _ b: String) -> Bool {
-    a.first?.lowercased() == b.first?.lowercased() && distance(a, b) <= 0.4
+    letters(a).first == letters(b).first && distance(a, b) <= 0.4
   }
+
+  /// The expected name a heard spelling is nearly (`sameName`), the nearest;
+  /// nil when two are as near, or for a title.
+  static func nameFor(_ s: String, in names: [String]) -> String? {
+    guard !isTitle(s) else { return nil }
+    var best: (d: Double, n: String)?
+    var tie = false
+    for n in names where sameName(s, n) {
+      let d = distance(s, n)
+      if best == nil || d < best!.d {
+        best = (d, n)
+        tie = false
+      } else if d == best!.d && n != best!.n {
+        tie = true
+      }
+    }
+    return tie ? nil : best?.n
+  }
+
+  /// Words said before a name (Agent Mulder, Mrs. Budahas): never respelt as one.
+  static let titles: Set<String> = [
+    "mr", "mrs", "ms", "dr", "agent", "colonel", "captain", "detective", "officer", "sir", "miss", "doctor", "lieutenant",
+    "sergeant", "general", "major", "lt", "col", "sgt", "capt", "chief", "sheriff", "special", "assistant", "director",
+    "section", "deputy", "inspector", "professor", "prof", "judge",
+  ]
+
+  static func isTitle(_ w: String) -> Bool { titles.contains(w.lowercased()) }
+
+  /// A name worth respelling others as: 4 letters or more (not a fragment), not a title.
+  static func isNameTarget(_ n: String) -> Bool { letters(n).count >= 4 && !isTitle(n) }
 
   static func isAcronym(_ w: String) -> Bool { w.count <= 5 && w.allSatisfy { $0.isUppercase || $0.isNumber } }
 
@@ -282,12 +339,16 @@ enum MadeSubs {
 
   static func text(_ ws: [Word]) -> String { ws.map(\.t).joined(separator: " ") }
 
-  /// Ends with . ? ! or …, maybe then a closing quote.
+  /// Ends with . ? ! or …, maybe then a closing quote; not a title's full stop ("Mrs. Budahas").
   static func endsSentence(_ t: String) -> Bool {
     var t = Substring(t)
     if t.last == "\"" || t.last == "”" { t = t.dropLast() }
-    return t.last.map(stops.contains) ?? false
+    guard let last = t.last, stops.contains(last) else { return false }
+    return !abbreviations.contains(t.lowercased())
   }
+
+  /// Titles written with a full stop, which is not the end of a sentence.
+  static let abbreviations: Set<String> = ["mr.", "mrs.", "ms.", "dr.", "prof.", "st.", "lt.", "col.", "sgt.", "capt.", "gen.", "rev."]
 
   /// "Uh, I think" → "I think"; a filler ending a sentence passes its full stop back.
   static func dropFillers(_ ws: [Word]) -> [Word] {
@@ -448,32 +509,35 @@ final class SubtitleMaker {
   private let limit = Limiter(1)
   private var inflight: [String: Task<SubtitleTrack, Error>] = [:]
 
-  /// Makes WebVTT for audio track `audio` of `f` and hands it to `keep`, once;
-  /// `progress` hears how far it has got (a second caller of a track already
-  /// being made only gets the result).
+  /// Makes WebVTT for audio track `audio` of `f` and hands it to `keep` with the
+  /// names it expected, once; `names` gives the names expected in the dialogue
+  /// (asked for once the dialogue is heard), `progress` hears how far it has got
+  /// (a second caller of a track already being made only gets the result).
   func make(
-    _ f: LibraryFile, audio: Int, progress: @escaping @MainActor (MadeSubs.Step) -> Void,
-    keep: @escaping @MainActor (String) throws -> SubtitleTrack
+    _ f: LibraryFile, audio: Int, names: @escaping @MainActor () async -> ShowNames.Found,
+    progress: @escaping @MainActor (MadeSubs.Step) -> Void,
+    keep: @escaping @MainActor (String, ShowNames.Found) throws -> SubtitleTrack
   ) async throws -> SubtitleTrack {
     let key = "\(f.id)|\(audio)"
     if let running = inflight[key] { return try await running.value }
     let path = f.path
     let task = Task { () throws -> SubtitleTrack in
       defer { inflight[key] = nil }
-      let vtt = try await limit.run {
+      let (vtt, found) = try await limit.run {
         let t0 = Date()
         // The main queue keeps the steps in order (separate tasks might not).
         let heard = try await MadeSubs.hear(path, audio: audio) { step in
           DispatchQueue.main.async { MainActor.assumeIsolated { progress(step) } }
         }
-        let named = MadeSubs.settleNames(heard, known: MadeSubs.dictionaryKnows)
+        let found = await names()
+        let named = MadeSubs.settleNames(heard, known: MadeSubs.dictionaryKnows, names: found.names)
         let cues = MadeSubs.cues(named)
         guard !cues.isEmpty else { throw MadeSubs.Failure(message: "No speech was heard in this audio track") }
         logLine("[subs] made \(f.name) (audio \(audio)): \(heard.reduce(0) { $0 + $1.count }) words, \(cues.count) cues in "
-          + "\(toFixed(Date().timeIntervalSince(t0), 1)) s")
-        return MadeSubs.vtt(cues)
+          + "\(toFixed(Date().timeIntervalSince(t0), 1)) s; \(found.names.count) names expected\(found.fromTVmaze ? " (TVmaze)" : "")")
+        return (MadeSubs.vtt(cues), found)
       }
-      return try keep(vtt)
+      return try keep(vtt, found)
     }
     inflight[key] = task
     return try await task.value

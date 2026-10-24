@@ -222,11 +222,13 @@ final class OnlineSubs {
     return self.list(file.id).first { $0.id == "d\(n)" }
   }
 
-  /// Keeps English subtitles made on this Mac from audio track `audio`.
-  func addMade(_ file: LibraryFile, _ vtt: String, audio: Int) throws -> SubtitleTrack? {
+  /// Keeps English subtitles made on this Mac from audio track `audio`;
+  /// `namesFrom` names where its expected names came from (credited).
+  func addMade(_ file: LibraryFile, _ vtt: String, audio: Int, namesFrom: String? = nil) throws -> SubtitleTrack? {
     let n = try store(file, vtt, DownloadedSub(
       n: 0, provider: OnlineSubs.madeHere, osFileId: 0, subtitleId: "", lang: "en",
-      release: "Made on this Mac from audio track \(audio + 1)", hashMatch: true, hearingImpaired: false, at: nowMs()))
+      release: "Made on this Mac from audio track \(audio + 1)\(namesFrom.map { ", names from \($0)" } ?? "")", hashMatch: true,
+      hearingImpaired: false, at: nowMs()))
     return list(file.id).first { $0.id == "d\(n)" }
   }
 

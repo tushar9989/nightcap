@@ -100,8 +100,9 @@ private final class Steps {
     try expectEqual(a?.source, "made")
     try expectEqual(a?.lang, "en")
     try expectEqual(a?.release, "Made on this Mac from audio track 2")
-    let b = try subs.addMade(file, "WEBVTT\n\n", audio: 0)
+    let b = try subs.addMade(file, "WEBVTT\n\n", audio: 0, namesFrom: "TVmaze")
     try expectEqual(b?.label, "English · Made on this Mac 2")
+    try expectEqual(b?.release, "Made on this Mac from audio track 1, names from TVmaze", "TVmaze is credited")
     let n = Int(a!.id.dropFirst())!
     try expect(subs.isMade(file.id, n))
     try expect(matches(subs.vtt(file.id, n) ?? "", "Hello\\."))
