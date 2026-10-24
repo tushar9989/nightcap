@@ -137,7 +137,7 @@ final class Engine {
   static let artTypes = ["poster", "backdrop", "card"]
   nonisolated static let artWidths = [320, 480, 800, 1280]
   static let rescanEvery: Double = 15 * 60
-  /// x<N> file next to the video, e<N> embedded track, d<N> downloaded.
+  /// x<N> file next to the video, e<N> embedded track, d<N> downloaded or made here.
   nonisolated static let subIdRe = Re(#"^[xed]\d+$"#)
   nonisolated static let downloadedIdRe = Re(#"^d\d+$"#)
   nonisolated static let tildeRe = Re(#"^~(?=$|\/)"#)
@@ -147,6 +147,7 @@ final class Engine {
   let libraryStore: JsonStore<Library>
   let media = Media()
   let subsync = SubSync()
+  let maker = SubtitleMaker()
   private(set) var analyzer: Analyzer!
   private(set) var onlineSubs: OnlineSubs!
   private(set) var trickplay: Trickplay!
@@ -517,9 +518,10 @@ final class Engine {
 
   /// The track without adverts, before any timing correction.
   private func plainVtt(_ f: LibraryFile, _ subId: String) async -> String? {
-    let vtt = subId.jsStartsWith("d")
-      ? Int(subId.dropFirst()).flatMap { onlineSubs.vtt(f.id, $0) }
-      : await media.subtitleVtt(f, subId)
+    let n = subId.jsStartsWith("d") ? Int(subId.dropFirst()) : nil
+    let vtt = subId.jsStartsWith("d") ? n.flatMap { onlineSubs.vtt(f.id, $0) } : await media.subtitleVtt(f, subId)
+    // Made here: nothing but the dialogue, which an advert filter could only harm.
+    if let n, onlineSubs.isMade(f.id, n) { return vtt }
     return vtt.map { Subtext.stripAds($0).vtt }
   }
 
@@ -646,6 +648,30 @@ final class Engine {
       track = t
     }
     return AutoSubtitleReply(track: track, fresh: r.fresh, status: onlineSubs.status())
+  }
+
+  // ---- Subtitles made on this Mac ------------------------------------------------------
+
+  /// Makes English subtitles from the dialogue of audio track `audio` (MadeSubs):
+  /// about 30 s for a 45-minute episode. Timed from the audio itself, so never synced.
+  func makeSubtitles(_ fileId: String, audio: Int = 0, progress: @escaping @MainActor (MadeSubs.Step) -> Void) async throws -> SubtitleTrack {
+    let f = try file(fileId)
+    let audio = max(0, audio)
+    do {
+      return try await maker.make(f, audio: audio, progress: progress) { vtt in
+        guard let track = try self.onlineSubs.addMade(f, vtt, audio: audio) else {
+          throw EngineError("Could not keep the subtitles", 500)
+        }
+        return track
+      }
+    } catch let e as MadeSubs.Failure {
+      throw EngineError(e.message, 500)
+    } catch let e as EngineError {
+      throw e
+    } catch {
+      logLine("[subs] making failed for \(f.name): \(error)")
+      throw EngineError("Could not make subtitles: \(error.localizedDescription)", 500)
+    }
   }
 
   // ---- Artwork ------------------------------------------------------------------------

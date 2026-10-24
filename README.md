@@ -50,8 +50,9 @@ shows and movies; each title has its own page with seasons and episodes.
 - **Subtitles** – `.srt`/`.vtt`/`.ass` next to the video and embedded text
   tracks, plus **online search on OpenSubtitles.com** (preferring subtitles
   timed for your exact file), optional automatic download for episodes that
-  have none, **sync to the dialogue** done locally (see below), manual timing
-  nudges, and adverts stripped from subtitle files.
+  have none, English subtitles **made on this Mac** from the dialogue (Apple's
+  speech recognition, see below), **sync to the dialogue** done locally,
+  manual timing nudges, and adverts stripped from subtitle files.
 - **A video player for any file** – Nightcap is in Finder's **Open With**
   menu for video files, takes files dropped on its Dock icon, and has
   **File → Open…** (⌘O). A video from your library plays as part of its
@@ -147,6 +148,35 @@ the Subtitles menu, undone, or nudged with G / H.
 
 Subtitles provided by [OpenSubtitles.com](https://www.opensubtitles.com).
 
+## Subtitles made on this Mac
+
+For a video with no subtitles, or none that fit, **Subtitles button → Make
+subtitles on this Mac** writes English subtitles from the dialogue of the
+audio track playing. Nothing leaves the Mac:
+
+- Apple's speech recognition (SpeechTranscriber, built into macOS 26) hears
+  the words and when each is said. If macOS doesn't have its English speech
+  model yet, it fetches it first; the menu shows how far it has got.
+- Each name's spellings are made one: the recogniser spells an unfamiliar name
+  several ways (Mulder, Molder, Maldo…), and the most common spelling is used.
+- The words become cues the way subtitle style guides ask:
+  - one sentence to a cue, a long one broken at a comma, a pause or before a
+    conjunction
+  - at most two lines of 42 characters, and 7 seconds
+  - fillers (uh, um) left out
+  - a quick exchange shares a two-line cue (speakers aren't told apart, so
+    there are no dashes)
+
+This takes about 30 s for a 45-minute episode. Compared with the published
+subtitles of three X-Files episodes:
+- 88–94 % of the words were found.
+- 98.5–99.8 % of those words were shown within half a second of the published
+  timing.
+
+It is offered when the audio track playing is English or unlabelled. Made
+subtitles are kept with the downloaded ones and listed as *English · Made on
+this Mac*; the Subtitles menu can remove them.
+
 ## Your data
 
 Stored in `~/Library/Application Support/Nightcap`: `config.json` (folders,
@@ -193,7 +223,8 @@ mac/
     Analysis.swift      detection queue + persisted index, decoding, credit frames
     Fingerprint.swift   fingerprint + matching (unit-tested)
     OpenSubtitles.swift OpenSubtitles.com API client, file hash
-    OnlineSubs.swift    search / download / auto-fetch for library videos
+    OnlineSubs.swift    search / download / auto-fetch for library videos; keeps made subtitles too
+    MadeSubs.swift      subtitles made on this Mac: speech recognition, names, cue rules
     SubSync.swift       subtitle-to-dialogue sync (speech activity + correlation)
     Subtext.swift       subtitle text: SRT -> WebVTT, advert removal, retiming
     Trickplay.swift     preview thumbnail sheets (seek bar, episode previews)

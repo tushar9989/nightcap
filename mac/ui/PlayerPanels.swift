@@ -164,6 +164,7 @@ private struct PanelOption: View {
   var more = false
   let action: () -> Void
   @State private var hovering = false
+  @Environment(\.isEnabled) private var enabled
 
   var body: some View {
     Button(action: action) {
@@ -179,10 +180,11 @@ private struct PanelOption: View {
       .padding(.vertical, 6)
       .padding(.horizontal, 8)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(hovering ? 0.1 : 0)))
+      .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(hovering && enabled ? 0.1 : 0)))
       .contentShape(Rectangle())
     }
     .buttonStyle(PlainTapStyle())
+    .opacity(enabled ? 1 : 0.6)
     .onHover { hovering = $0 }
   }
 
@@ -279,6 +281,22 @@ private struct SubtitlesColumn: View {
         PanelOption(label: s.label, on: s.id == player.subId) { player.selectSubtitle(s.id) }
       }
       PanelOption(label: "Search online…", on: false, more: true) { player.togglePanel(.online) }
+      if player.canMakeSubtitles, !tracks.contains(where: { $0.source == "made" }) {
+        PanelOption(label: "Make subtitles on this Mac", on: false, more: true) { player.makeSubtitles() }
+          .disabled(player.making != nil)
+          .help("Hears the dialogue and writes English subtitles, on this Mac (about 30 s for an episode)")
+        if let making = player.making {
+          // Its own line, as wide as the option, so the panel doesn't change size as it counts.
+          Text(making)
+            .font(.app(size: 12))
+            .monospacedDigit()
+            .foregroundStyle(Theme.text2)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: 180, alignment: .leading)
+            .padding(.leading, 30)
+            .padding(.bottom, 4)
+        }
+      }
       if let id = player.subId {
         timing(id, track: tracks.first { $0.id == id })
       }
@@ -297,14 +315,29 @@ private struct SubtitlesColumn: View {
         PanelButton(label: "Later", help: "Show subtitles later (H)") { player.setSubDelay(d + 0.25, osd: false) }
       }
       .padding(.top, 6)
-      PanelButton(
-        label: player.syncing == id ? "Listening to the dialogue…" : "Sync to dialogue",
-        help: "Match the subtitles to the dialogue in the audio (runs on this Mac)", full: true
-      ) {
-        player.syncToAudio()
+      if track?.source == "made" {
+        // Timed from the audio itself: nothing to sync.
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+          Text("Made from the dialogue ").fixedSize(horizontal: false, vertical: true)
+          Button("Remove") { player.removeTrack(id) }
+            .buttonStyle(PlainTapStyle())
+            .underline()
+            .padding(.horizontal, 4)
+        }
+        .font(.app(size: 12))
+        .foregroundStyle(Theme.text2)
+        .frame(width: 220, alignment: .leading)
+        .padding(.top, 8)
+      } else {
+        PanelButton(
+          label: player.syncing == id ? "Listening to the dialogue…" : "Sync to dialogue",
+          help: "Match the subtitles to the dialogue in the audio (runs on this Mac)", full: true
+        ) {
+          player.syncToAudio()
+        }
+        .disabled(player.syncing != nil)
+        .padding(.top, 8)
       }
-      .disabled(player.syncing != nil)
-      .padding(.top, 8)
       if let sync = track?.sync {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
           Text("Synced: \(describeSync(sync)) ").fixedSize(horizontal: false, vertical: true)

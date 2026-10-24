@@ -172,8 +172,8 @@ cat >"$C/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Nightcap</string>
   <key>CFBundleDisplayName</key><string>Nightcap</string>
   <key>CFBundleIdentifier</key><string>local.nightcap.app</string>
-  <key>CFBundleVersion</key><string>8</string>
-  <key>CFBundleShortVersionString</key><string>0.6.0</string>
+  <key>CFBundleVersion</key><string>9</string>
+  <key>CFBundleShortVersionString</key><string>0.7.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>Nightcap</string>
   <key>CFBundleIconFile</key><string>Nightcap</string>
@@ -181,6 +181,7 @@ cat >"$C/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.entertainment</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Nightcap listens to a video’s dialogue, on this Mac, to make subtitles.</string>
   <key>NightcapLegacyData</key><string>$ROOT/data</string>
   <key>CFBundleDocumentTypes</key>
   <array><dict>

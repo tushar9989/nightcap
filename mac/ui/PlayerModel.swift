@@ -87,6 +87,8 @@ final class PlayerModel {
   private(set) var subDelay = 0.0
   /// The track being synced to the dialogue.
   private(set) var syncing: String?
+  /// How far making subtitles from the dialogue has got, while it runs.
+  private(set) var making: String?
   var online: OnlineSearch?
   /// The online search field (searched when submitted).
   var onlineQuery = ""
@@ -266,6 +268,7 @@ final class PlayerModel {
     online = nil
     onlineQuery = ""
     syncing = nil
+    making = nil
     trick = nil
     trickSheets = [:]
     previewTask?.cancel()
@@ -692,6 +695,50 @@ final class PlayerModel {
 
   private func setTrackSync(_ id: String, _ sync: SubTiming?) {
     if let i = info?.subtitles.firstIndex(where: { $0.id == id }) { info?.subtitles[i].sync = sync }
+  }
+
+  // ---- Subtitles made on this Mac ---------------------------------------------------------------
+
+  /// Apple's recogniser hears English: offered while the audio track playing
+  /// is English or unlabelled.
+  var canMakeSubtitles: Bool {
+    guard let tracks = info?.probe?.audio else { return true }
+    guard audio < tracks.count else { return false }
+    let code = tracks[audio].lang.jsLowercased
+    return code.isEmpty || code == "und" || (lang3[code] ?? code) == "en"
+  }
+
+  /// English subtitles from the dialogue of the audio track playing (about
+  /// 30 s for an episode, on this Mac), shown when made.
+  func makeSubtitles() {
+    guard let fid, making == nil else { return }
+    let seq = openSeq
+    making = "Making subtitles…"
+    Task {
+      do {
+        let track = try await app.engine.makeSubtitles(fid, audio: audio) { [weak self] step in
+          guard let self, seq == openSeq, making != nil else { return }
+          making = PlayerModel.makingText(step)
+        }
+        guard seq == openSeq else { return }
+        making = nil
+        addTrack(track)
+        selectSubtitle(track.id)
+        win?.toast("Subtitles added: \(track.label)", ms: 4000)
+      } catch {
+        guard seq == openSeq else { return }
+        making = nil
+        win?.toast(errorText(error), ms: 6000)
+      }
+    }
+  }
+
+  private static func makingText(_ step: MadeSubs.Step) -> String {
+    switch step {
+    case let .model(f): return "Getting Apple’s English speech model… \(Int(f * 100))%"
+    case .audio: return "Reading the audio…"
+    case let .listening(f): return "Listening to the dialogue… \(Int(f * 100))%"
+    }
   }
 
   // ---- Online subtitles (OpenSubtitles.com) ---------------------------------------------------------

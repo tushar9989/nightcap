@@ -5,10 +5,11 @@ import Foundation
 
 /// A subtitle track the player can show.
 struct SubtitleTrack: Equatable, Identifiable {
-  /// x<N> file next to the video, e<N> embedded track, d<N> downloaded.
+  /// x<N> file next to the video, e<N> embedded track, d<N> downloaded
+  /// or made on this Mac.
   var id: String
   var label: String
-  /// "file", "embedded" or "online".
+  /// "file", "embedded", "online" or "made".
   var source: String
   var lang: String? = nil
   var release: String? = nil

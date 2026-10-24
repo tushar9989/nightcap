@@ -1,11 +1,12 @@
 import Foundation
 
 // Subtitles found online for library videos: search, download, and keep them
-// with the app's data (never written into the media folders).
+// with the app's data (never written into the media folders). Subtitles made
+// on this Mac (MadeSubs) are kept with them, as provider "nightcap".
 //
 // On disk (DATA_DIR):
 //   opensubtitles.json            API key, sign-in token, quota, show ids (owner-only file)
-//   subs-downloaded.json          which subtitles were downloaded for which video
+//   subs-downloaded.json          which subtitles were downloaded or made for which video
 //   subs-downloaded/<fileId>/<n>.vtt
 
 /// What a subtitle search found, best first, and the query it ran.
@@ -59,13 +60,21 @@ final class OnlineSubs {
   func list(_ fileId: String) -> [SubtitleTrack] {
     var seen: [JSKey: Int] = [:]
     return entries(fileId).map { e in
-      let lang = languageName(e.lang)
-      let count = (seen[JSKey(lang)] ?? 0) + 1
-      seen[JSKey(lang)] = count
+      let made = e.provider == OnlineSubs.madeHere
+      let name = "\(languageName(e.lang)) · \(made ? "Made on this Mac" : "OpenSubtitles")"
+      let count = (seen[JSKey(name)] ?? 0) + 1
+      seen[JSKey(name)] = count
       return SubtitleTrack(
-        id: "d\(e.n)", label: "\(lang) · OpenSubtitles\(count > 1 ? " \(count)" : "")", source: "online", lang: e.lang,
+        id: "d\(e.n)", label: "\(name)\(count > 1 ? " \(count)" : "")", source: made ? "made" : "online", lang: e.lang,
         release: e.release, hashMatch: e.hashMatch)
     }
+  }
+
+  /// The provider of subtitles made on this Mac.
+  nonisolated static let madeHere = "nightcap"
+
+  func isMade(_ fileId: String, _ n: Int) -> Bool {
+    entries(fileId).contains { $0.n == n && $0.provider == OnlineSubs.madeHere }
   }
 
   func vtt(_ fileId: String, _ n: Int) -> String? {
@@ -204,6 +213,25 @@ final class OnlineSubs {
     guard let vtt = await media.textToVtt(got.text, ext: extname(got.fileName).jsLowercased), vtt.jsIncludes("-->") else {
       throw OSError("The downloaded subtitle could not be read", 502)
     }
+    let lang = OnlineSubs.langRe.test(pick.language) ? pick.language : "und"
+    let n = try store(file, vtt, DownloadedSub(
+      n: 0, provider: "opensubtitles", osFileId: id, subtitleId: pick.subtitleId.jsSlice(0, 40), lang: lang,
+      release: (pick.release.isEmpty ? got.fileName : pick.release).jsSlice(0, 300), hashMatch: pick.hashMatch,
+      hearingImpaired: pick.hearingImpaired, at: nowMs()))
+    noneFound[JSKey("\(file.id)|\(lang.jsLowercased)")] = nil
+    return self.list(file.id).first { $0.id == "d\(n)" }
+  }
+
+  /// Keeps English subtitles made on this Mac from audio track `audio`.
+  func addMade(_ file: LibraryFile, _ vtt: String, audio: Int) throws -> SubtitleTrack? {
+    let n = try store(file, vtt, DownloadedSub(
+      n: 0, provider: OnlineSubs.madeHere, osFileId: 0, subtitleId: "", lang: "en",
+      release: "Made on this Mac from audio track \(audio + 1)", hashMatch: true, hearingImpaired: false, at: nowMs()))
+    return list(file.id).first { $0.id == "d\(n)" }
+  }
+
+  /// Saves a track for `file` under the next number (set in `entry` here); the number.
+  private func store(_ file: LibraryFile, _ vtt: String, _ entry: DownloadedSub) throws -> Int {
     let list = entries(file.id)
     // Never reused, so timing fixes and remembered delays can't attach to another file.
     let n = max(index.data.seq ?? 0, list.map(\.n).max() ?? .min) + 1
@@ -213,14 +241,11 @@ final class OnlineSubs {
       // Not an OpenSubtitles failure (those answer 502).
       throw EngineError("Could not save the subtitle in \(folder)", 500)
     }
-    let lang = OnlineSubs.langRe.test(pick.language) ? pick.language : "und"
-    index.data.files[file.id, default: []].append(DownloadedSub(
-      n: n, provider: "opensubtitles", osFileId: id, subtitleId: pick.subtitleId.jsSlice(0, 40), lang: lang,
-      release: (pick.release.isEmpty ? got.fileName : pick.release).jsSlice(0, 300), hashMatch: pick.hashMatch,
-      hearingImpaired: pick.hearingImpaired, at: nowMs()))
+    var entry = entry
+    entry.n = n
+    index.data.files[file.id, default: []].append(entry)
     index.save()
-    noneFound[JSKey("\(file.id)|\(lang.jsLowercased)")] = nil
-    return self.list(file.id).first { $0.id == "d\(n)" }
+    return n
   }
 
   /// Fetches the best subtitle in `language` unless the video already has one.
