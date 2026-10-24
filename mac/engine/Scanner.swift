@@ -16,7 +16,11 @@ enum Scanner {
   static let subExt: Set<String> = [".srt", ".vtt", ".ass", ".ssa"]
   static let imgExt: Set<String> = [".jpg", ".jpeg", ".png", ".webp"]
   static let skipDirs = Re(#"^(\$recycle\.bin|system volume information|lost\+found|@eadir|#recycle|\.?trash.*)$"#, "i")
-  static let extraDirs = Re(#"^(extras?|featurettes?|behind[ ._\-]the[ ._\-]scenes|deleted[ ._\-]scenes|interviews?|trailers?|samples?|shorts|bonus( features)?)$"#, "i")
+  static let extraDirs = Re(#"^(e?xtras?|featurettes?|behind[ ._\-]the[ ._\-]scenes|deleted[ ._\-]scenes|interviews?|trailers?|samples?|shorts|bonus( features)?)$"#, "i")
+  /// "Xtras - Baywatch Nights S01": put with a show as extra, named after what it holds.
+  static let extrasLabelRe = Re(#"^(?:e?xtras?|bonus)\s*[-–—:]\s*"#, "i")
+  /// A folder of films that names none of them ("Films", "Xtras - Movies").
+  static let filmsDirRe = Re(#"^(?:(?:e?xtras?|bonus)\s*[-–—:]\s*)?(?:films?|movies?)$"#, "i")
   static let subDirs = Re(#"^(subs?|subtitles?)$"#, "i")
   static let partRe = Re(#"(?:^|[\s._\-])(?:cd|disc|disk|part|pt)[\s._\-]*([0-9]{1,2})(?:$|[\s._\-])"#, "i")
   static let maxDepth = 8
@@ -76,13 +80,23 @@ enum Scanner {
   private static let episodePatterns: [(Re, Bool)] = [
     // (pattern, has a season group)
     (Re(#"(?:^|[^a-z0-9])season[\s._\-]*([0-9]{1,2})[\s._,\-]*episode[\s._\-]*([0-9]{1,3})(?:\s*(?:\&|\+|and)\s*([0-9]{1,3}))?(?![0-9])"#, "i"), true),
-    (Re(#"(?:^|[^a-z0-9])s([0-9]{1,2})[\s._\-]*e([0-9]{1,3})(?:-?e([0-9]{1,3}))?"#, "i"), true),
+    // "S02E01+E02", "S07E08a" (a part)
+    (Re(#"(?:^|[^a-z0-9])s([0-9]{1,2})[\s._\-]*e([0-9]{1,3})(?:[-+]?e([0-9]{1,3}))?(?:[a-d](?=$|[\s._\-]))?"#, "i"), true),
     (Re(#"(?:^|[^a-z0-9])([0-9]{1,2})x([0-9]{2,3})(?![0-9p])"#, "i"), true),
     (Re(#"(?:^|[^a-z0-9])(?:episode|ep|e)[\s._\-]*([0-9]{1,3})(?:\s*(?:\&|\+|and|-)\s*(?:e|ep)?([0-9]{1,3}))?(?![0-9])"#, "i"), false),
     (Re(#"\s-\s([0-9]{1,3})(?:v[0-9])?(?=$|\s|\[|\()"#, "i"), false),
   ]
   private static let leadSepRe = Re(#"^[\s._\-]+"#)
   private static let leadNumberRe = Re(#"^([0-9]{1,3})(?![0-9])(?:[\s._\-]+(.*))?$"#)
+  /// "Baywatch S11M01 Hawaiian Wedding": a TV film of the show (as some packs mark them).
+  private static let tvFilmRe = Re(#"(?:^|[^a-z0-9])s[0-9]{1,2}[\s._\-]*m([0-9]{1,2})(?![0-9])"#, "i")
+  /// A year opening the bracket of release details after a title: "(2003 360p re-dvdrip)".
+  private static let titleYearRe = Re(#"\s*\((?:19|20)[0-9]{2}(?![0-9])[^)]*\)?$"#)
+
+  /// The title after an episode's numbering.
+  private static func episodeTitle(_ rest: String, dots: Bool) -> String {
+    titleYearRe.replace(cleanTitle(leadSepRe.replace(rest, "", global: false), dots: dots), "", global: false)
+  }
 
   /// Episode numbering from a file name.
   static func parseEpisode(_ stem: String) -> Episode {
@@ -91,8 +105,11 @@ enum Scanner {
       guard let m = re.match(stem) else { continue }
       let season = hasSeason ? Int(m[1]!) : nil
       let episode = Int(m[hasSeason ? 2 : 1]!)
-      let rest = stem.jsSlice(m.end)
-      return Episode(season: season, episode: episode, title: cleanTitle(leadSepRe.replace(rest, "", global: false), dots: dots), strong: true)
+      return Episode(season: season, episode: episode, title: episodeTitle(stem.jsSlice(m.end), dots: dots), strong: true)
+    }
+    // A TV film of the show goes with the specials.
+    if let m = tvFilmRe.match(stem) {
+      return Episode(season: 0, episode: Int(m[1]!), title: episodeTitle(stem.jsSlice(m.end), dots: dots), strong: true)
     }
     if let lead = leadNumberRe.match(stem) {
       return Episode(season: nil, episode: Int(lead[1]!), title: cleanTitle(lead[2] ?? "", dots: dots), strong: false)
@@ -122,7 +139,7 @@ enum Scanner {
   /// The show a season folder names, if any: "Breaking.Bad.S01.720p" -> "breaking bad",
   /// "Season 01" -> "" (a bare season label).
   private static func seasonOwner(_ name: String) -> String {
-    guard let m = seasonOwnerRe.match(name) else { return normName("") }
+    guard let m = seasonOwnerRe.match(extrasLabelRe.replace(name, "", global: false)) else { return normName("") }
     let lead = m[1] ?? ""
     return normName(parseTitle(lead.isEmpty ? " " : lead).name)
   }
@@ -135,14 +152,20 @@ enum Scanner {
   }
 
   /// Is `dir` a season of the show folder `parent`? Bare labels always are;
-  /// "Show.S01" release folders only when the show name matches the parent.
+  /// "Show.S01" release folders only when they name the parent's show, not a longer
+  /// name ("Baywatch Nights S01" is not a season of Baywatch).
   private static func isSeasonOf(_ dir: DirNode, _ parent: DirNode) -> Bool {
     if seasonNumber(dir.name) == nil { return false }
     if dir.dirs.contains(where: { seasonNumber($0.name) != nil }) { return false }
     let owner = seasonOwner(dir.name)
     if owner.isEmpty || owner == "the" { return true }
     let parentName = normName(showSuffix.replace(parseTitle(parent.name).name, "", global: false))
-    return parentName.jsIncludes(owner) || owner.jsIncludes(parentName)
+    return parentName.isEmpty || hasWords(parentName, owner)
+  }
+
+  /// `name` has the words of `part`, whole and in order ("the x files" has "x files").
+  private static func hasWords(_ name: String, _ part: String) -> Bool {
+    " \(name) ".jsIncludes(" \(part) ")
   }
 
   // ---- Walking the folders ------------------------------------------------------------
@@ -295,7 +318,8 @@ enum Scanner {
   }
 
   private static func looksLikeShow(_ node: DirNode) -> Bool {
-    let dirs = contentDirs(node)
+    // What was put with a show as extra ("Xtras - Movies") doesn't count against its seasons.
+    let dirs = contentDirs(node).filter { !extrasLabelRe.test($0.name) }
     let seasonDirs = dirs.filter { isSeasonOf($0, node) }
     if !seasonDirs.isEmpty && Double(seasonDirs.count) >= (Double(dirs.count) / 2).rounded(.up) { return true }
     let eps = node.videos.filter { parseEpisode(stemOf($0.name)).strong }
@@ -344,9 +368,9 @@ enum Scanner {
     return showKeys.map { shows[$0]! } + out
   }
 
-  /// A show folder may also hold its films ("Films/Fight the Future/") and
-  /// bonus material ("Extras/"). Films become their own titles; extras become an
-  /// "Extras" section at the end of the show.
+  /// A show folder may also hold its films ("Films/Fight the Future/"), another
+  /// show (a spin-off) and bonus material ("Extras/"). Films and other shows become
+  /// their own titles; extras become an "Extras" section at the end of the show.
   private static func classifyShow(_ node: DirNode, strict: Bool) -> [Spec] {
     var out: [Spec] = []
     var seasonDirs: [DirNode] = []
@@ -358,10 +382,24 @@ enum Scanner {
         seasonDirs.append(d)
       } else {
         let inner = classifyAuto(d)
-        if !inner.isEmpty && inner.allSatisfy({ $0.kind == .movie }) { out += inner } else { seasonDirs.append(d) }
+        if !inner.isEmpty && (inner.allSatisfy({ $0.kind == .movie }) || namesOtherShow(d, node)) { out += inner } else { seasonDirs.append(d) }
       }
     }
     return [Spec(kind: .show, node: node, seasonDirs: seasonDirs, extraDirs: extras)] + out
+  }
+
+  /// Episodes in `dir` named for a show other than `parent`'s ("Baywatch Nights S01E01"
+  /// in a Baywatch folder), none for the parent's.
+  private static func namesOtherShow(_ dir: DirNode, _ parent: DirNode) -> Bool {
+    let parentName = normName(showName(parent).name)
+    var other = false
+    for v in collectVideos(dir) {
+      let owner = normName(fileShowName(stemOf(v.name)))
+      if owner.isEmpty { continue }
+      if hasWords(parentName, owner) { return false }
+      other = true
+    }
+    return other
   }
 
   private static func classifyAuto(_ node: DirNode) -> [Spec] {
@@ -369,7 +407,7 @@ enum Scanner {
     let dirs = contentDirs(node)
     if dirs.isEmpty {
       let vids = node.videos
-      if vids.count == 1 { return looseSpecs(node, vids, named: true) }
+      if vids.count == 1 { return looseSpecs(node, vids, named: !filmsDirRe.test(node.name)) }
       if vids.count > 1 && vids.allSatisfy({ partRe.test(stemOf($0.name)) }) {
         return [Spec(kind: .movie, node: node, videos: vids, named: true)]
       }
@@ -377,7 +415,7 @@ enum Scanner {
       if vids.count > 1 && Double(numbered) >= Double(vids.count) * 0.6 { return [Spec(kind: .show, node: node)] }
       return looseSpecs(node)
     }
-    var out = looseSpecs(node, node.videos, named: node.videos.count == 1)
+    var out = looseSpecs(node, node.videos, named: node.videos.count == 1 && !filmsDirRe.test(node.name))
     for d in dirs { out += classifyAuto(d) }
     return out
   }
@@ -385,7 +423,7 @@ enum Scanner {
   private static func classifyRoot(_ root: DirNode, _ kind: String) -> [Spec] {
     if kind == "movies" {
       return collectVideos(root).map { v in
-        Spec(kind: .movie, node: v.dir, videos: [v], named: v.dir.videos.count == 1 && v.dir !== root)
+        Spec(kind: .movie, node: v.dir, videos: [v], named: v.dir.videos.count == 1 && v.dir !== root && !filmsDirRe.test(v.dir.name))
       }
     }
     if looksLikeShow(root) { return classifyShow(root, strict: kind == "shows") }
@@ -439,7 +477,7 @@ enum Scanner {
   /// folder added on its own ("Season 1") is named after its parent.
   private static func showName(_ node: DirNode) -> (name: String, year: Int?) {
     for raw in [node.name, basename(dirname(node.path))] {
-      let (name, year) = parseTitle(raw)
+      let (name, year) = parseTitle(extrasLabelRe.replace(raw, "", global: false))
       let stripped = showSuffix.replace(" \(name)", "", global: false).jsTrimmed
       if !stripped.isEmpty && seasonNumber(stripped) == nil { return (stripped, year) }
     }
@@ -534,10 +572,22 @@ enum Scanner {
     return b
   }
 
+  /// "Baywatch M01 (2017 360p re-blurip)": a film's year opening a bracket of release
+  /// details, and the film's number in a pack before it.
+  private static let filmYearRe = Re(#"^(.+?)(?:\s+m[0-9]{1,2})?\s*\(((?:19|20)[0-9]{2})(?:[\s\-][^)]*)?\)"#, "i")
+
+  /// A film's name and year from its file's name.
+  private static func filmTitle(_ stem: String) -> (name: String, year: Int?) {
+    if let m = filmYearRe.match(stem) {
+      let name = cleanTitle(m[1]!)
+      if !name.isEmpty { return (name, Int(m[2]!)) }
+    }
+    return parseTitle(stem)
+  }
+
   private static func buildMovie(_ spec: Spec) -> Built {
     let v = spec.videos![0]
-    let src = spec.named ? spec.node.name : stemOf(v.name)
-    let (name, year) = parseTitle(src)
+    let (name, year) = spec.named ? parseTitle(spec.node.name) : filmTitle(stemOf(v.name))
     let b = Built(kind: .movie, name: name, year: year, node: spec.node)
     b.videos = spec.videos!
     b.named = spec.named

@@ -19,8 +19,9 @@ shows and movies; each title has its own page with seasons and episodes.
 - **Library from folders** – add any number of folders (local, external drives).
   Season subfolders become seasons; release-style names (`Show.S01E02…`,
   `Show Season 01 Episode 02 - Title`, `1x02`, `[Group] Show - 02`) are parsed;
-  films and `Extras` inside a show folder are handled; split shows across
-  drives are merged. Rescans every 15 minutes.
+  films and `Extras` (or `Xtras`) inside a show folder are handled, and a
+  spin-off kept there (`Xtras - Baywatch Nights S01`) becomes a show of its
+  own; split shows across drives are merged. Rescans every 15 minutes.
 - **Resume** – progress is saved every few seconds and on pause; *Watching*
   resumes the episode in progress or the next one.
 - **Skip Intro / Next Episode** – detected per episode (see below), with a

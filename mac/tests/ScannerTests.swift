@@ -153,4 +153,65 @@ private func scan(_ root: String, _ kind: String = "auto") -> [TitleDesc] {
     try expectEqual(Scanner.looseFile(join(root, "Downloads/Missing.mkv")), nil)
     try expectEqual(Scanner.looseFile(join(root, "Downloads/Subs")), nil)
   }
+
+  // Names as one uploader's packs have them (2026-10-24): Baywatch Nights had been taken for
+  // seasons 1 and 2 of Baywatch, and a Rockford Files episode for one of Magnum's.
+  t.test("a spin-off in a show's folder is a show of its own; its films are named from the file") {
+    let b = "Baywatch S01-S11 (1989-) + Nights"
+    let root = tree([
+      "\(b)/Baywatch S01 (360p re-dvdrip)/Baywatch S01E01 Panic At Malibu Pier.mp4",
+      "\(b)/Baywatch S01 (360p re-dvdrip)/Baywatch S01E02 In Deep.mp4",
+      "\(b)/Baywatch S02 (360p re-dvdrip)/Baywatch S02E01+E02 Nightmare Bay.mp4",
+      "\(b)/Baywatch S02 (360p re-dvdrip)/Baywatch S02E03 The One That Got Away.mp4",
+      "\(b)/Baywatch S11M01 Hawaiian Wedding (2003 360p re-dvdrip).mp4",
+      "\(b)/Xtras - Baywatch Nights S01 (1995- 360p re-dvdrip)/Baywatch Nights S01E01 Pursuit.mp4",
+      "\(b)/Xtras - Baywatch Nights S01 (1995- 360p re-dvdrip)/Baywatch Nights S01E02 Bad Blades.mp4",
+      "\(b)/Xtras - Baywatch Nights S02 (360p re-dvdrip)/Baywatch Nights S02E01Terror of the Deep.mp4",
+      "\(b)/Xtras - Baywatch Nights S02 (360p re-dvdrip)/Baywatch Nights S02E02 Creature.mp4",
+      "\(b)/Xtras - Movies/Baywatch M01 (2017 360p re-blurip).mp4",
+    ])
+    try expectEqual(
+      scan(join(root, b)),
+      [
+        TitleDesc(
+          kind: "show", name: "Baywatch", year: nil,
+          seasons: [
+            SeasonDesc("Season 1", ["Panic At Malibu Pier", "In Deep"]),
+            SeasonDesc("Season 2", ["Nightmare Bay", "The One That Got Away"]),
+            SeasonDesc("Specials", ["Hawaiian Wedding"]),
+          ]),
+        TitleDesc(kind: "movie", name: "Baywatch", year: 2017, seasons: [SeasonDesc("", ["Baywatch"])]),
+        TitleDesc(
+          kind: "show", name: "Baywatch Nights", year: nil,
+          seasons: [
+            SeasonDesc("Season 1", ["Pursuit", "Bad Blades"]),
+            SeasonDesc("Season 2", ["Terror of the Deep", "Creature"]),
+          ]),
+      ])
+  }
+
+  t.test("another show's episode in a show's Xtras folder is one of its extras") {
+    let m = "Magnum PI S01-S08 (1980-)"
+    let root = tree([
+      "\(m)/Magnum PI S05 (360p re-dvdrip)/Magnum PI S05E04 The Legacy of Garwood Huddle.mp4",
+      "\(m)/Magnum PI S05 (360p re-dvdrip)/Magnum PI S05E05 Under World.mp4",
+      "\(m)/Magnum PI S07 (360p re-dvdrip)/Magnum PI S07E08a Novel Connection.mp4",
+      "\(m)/Magnum PI S07 (360p re-dvdrip)/Magnum PI S07E08b Magnum on Ice (Murder She Wrote S03E08).mp4",
+      "\(m)/Magnum PI S07 (360p re-dvdrip)/Magnum PI S07E09 Kapu.mp4",
+      "\(m)/Xtras/The Rockford Files S05E04 White on White and Nearly Perfect.mp4",
+    ])
+    try expectEqual(
+      scan(join(root, m)),
+      [
+        TitleDesc(
+          kind: "show", name: "Magnum PI", year: nil,
+          seasons: [
+            SeasonDesc("Season 5", ["The Legacy of Garwood Huddle", "Under World"]),
+            SeasonDesc("Season 7", ["Novel Connection", "Magnum on Ice (Murder She Wrote S03E08)", "Kapu"]),
+            SeasonDesc("Extras", ["The Rockford Files S05E04 White on White and Nearly Perfect"]),
+          ])
+      ])
+    let lib = Scanner.scanLibrary([Folder(id: "f", path: join(root, m), kind: "auto", addedAt: 0)])
+    try expectEqual(lib.titles[0].seasons[1].episodes.map { lib.files[$0]!.number }, [8, 8, 9])
+  }
 }
