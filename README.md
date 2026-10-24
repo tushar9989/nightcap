@@ -102,6 +102,17 @@ Everything runs locally; nothing is uploaded.
    if the nearest ones disagree (seasons that alternate between intro versions)
    the search widens. Shared music near the start is the intro (15 s–2.5 min);
    near the end, the end credits.
+   - **Titles only two episodes have** (a two-part premiere) count when the two
+     match each other and nobody else, closely, for 45 s or more, and (intros)
+     at the same point in both: a recap replays part one somewhere else.
+   - **A long cold open** can push the intro past the first 10 minutes: an
+     episode that found none, or one running into that limit, is fingerprinted
+     further (40 % of it, up to 20 minutes) and matched again.
+   - **Other seasons.** An episode that still matches nothing is compared with
+     the nearest episodes of the show's other seasons (a premiere re-edited
+     with a later season's titles). Two must agree, and for an intro the shared
+     part must be all of what those two share: a pilot whose own opening song
+     quotes the theme does not get the quote as its intro.
 3. **Video check for credits.** The credits start is refined by looking for
    the first frame of crisp text on black just before the shared end music.
    Movies, and shows without a shared end theme, use this video check alone
@@ -111,12 +122,18 @@ Everything runs locally; nothing is uploaded.
 The fingerprints are saved as an **index** (`fingerprints/*.fp` in the data
 folder) and the results in `analysis.json`. Adding an episode only fingerprints that
 episode; the matching for its season then re-runs from the index in
-milliseconds. Changing the matching (bumping `ANALYSIS_VERSION`) re-matches the
-whole library without decoding anything again.
+milliseconds. Changing the matching (bumping `Analyzer.version`) re-matches the
+whole library without decoding anything again (only a longer start for the
+episodes that need one).
 
-On *The X-Files* (201 episodes, DVD rips): intros found in 199 (the two misses
-are the Pilot, which has no title sequence, and one episode with a different
-opening); end credits in 199, checked against the actual frames.
+On *The X-Files* (201 episodes, DVD rips): intros found in 200 (the miss is the
+Pilot, which has no title sequence); end credits in 198, checked against the
+actual frames. On *Baywatch* (241 episodes, German DVD rips with English
+sound): intros in 240 (233 before the three rules above) and end credits in 236
+(231), every new one checked against the frames. The miss is the pilot, a TV
+film whose opening song only quotes the theme: mark it in the player. Season
+2's double-length premiere has its credits found 66 s late, as its longer
+credits share only their last 35 s with the other seasons'.
 
 Limits: credits that roll over moving footage (some films) are not detected –
 those still count as watched at 95%. Corrections made in the player

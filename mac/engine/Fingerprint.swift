@@ -310,6 +310,54 @@ enum FP {
     var end: Double
     var support: Int
     var compared: Int
+    /// Shared with one other episode only (see PairRule).
+    var pair = false
+  }
+
+  /// An intro version used by just two episodes (a two-part premiere with
+  /// titles of its own) never gets the two agreeing siblings the season rule
+  /// asks for. Such a pair still counts when the two match each other and no
+  /// other episode, closely and for long enough to be titles rather than a
+  /// reused jingle or a scene a recap plays again.
+  struct PairRule {
+    var minFrames = FP.secToFrames(45)
+    var maxBits = 6.0
+    /// How far apart, in seconds, the segment may start in the two episodes
+    /// (nil: anywhere). A recap replays part one somewhere else than it first played.
+    var maxShift: Double? = 10
+  }
+
+  /// One comparison, seen from the episode being analysed: where it has the
+  /// shared segment, and which episode (index in the list compared with) shares it where.
+  private struct Found {
+    var start: Double
+    var end: Double
+    var other: Int
+    var otherStart: Double
+    var otherEnd: Double
+    var seg: Segment
+  }
+
+  private static func overlaps(_ x: Found, _ y: Found) -> Bool {
+    min(x.end, y.end) - max(x.start, y.start) >= 0.5 * min(x.end - x.start, y.end - y.start)
+  }
+
+  private static func span(_ arr: [Found]) -> Double { arr.reduce(0.0) { $0 + $1.end - $1.start } }
+
+  /// The most results that agree on where the segment is.
+  private static func bestCluster(_ found: [Found]) -> [Found] {
+    var best: [Found] = []
+    for c in found {
+      let cluster = found.filter { overlaps(c, $0) }
+      if cluster.count > best.count || (cluster.count == best.count && span(cluster) > span(best)) { best = cluster }
+    }
+    return best
+  }
+
+  private static func median(_ xs: [Double]) -> Double {
+    let s = xs.stableSorted(by: numCompare)
+    let m = s.count >> 1
+    return s.count % 2 == 1 ? s[m] : (s[m - 1] + s[m]) / 2
   }
 
   /// Given fingerprints for every episode of a group (usually one season),
@@ -318,15 +366,16 @@ enum FP {
   /// between intro versions, so when the nearest siblings disagree the search
   /// widens to more episodes (comparisons are cheap once fingerprints exist).
   ///   targets: ids to produce results for (others only serve as references)
+  ///   pairs: also accept two episodes that share a segment with nobody else
   static func detectRepeatedSegments(
     _ members: [Member], _ targets: [String], _ opts: MatchOptions = MatchOptions(),
-    minSiblings: Int = 4, maxSiblings: Int = 10
+    minSiblings: Int = 4, maxSiblings: Int = 10, pairs: PairRule? = nil
   ) -> [(id: String, result: Repeated)] {
     var byId: [String: Int] = [:]
     for (i, m) in members.enumerated() { byId[m.id] = i }
     var cache: [String: Segment?] = [:]
-    struct Found { var start: Double; var end: Double }
-    func pair(_ a: Member, _ b: Member) -> Found? {
+    func pair(_ i: Int, _ j: Int) -> Found? {
+      let a = members[i], b = members[j]
       let key = a.id < b.id ? "\(a.id)|\(b.id)" : "\(b.id)|\(a.id)"
       if cache[key] == nil {
         let (x, y) = a.id < b.id ? (a, b) : (b, a)
@@ -334,57 +383,103 @@ enum FP {
       }
       guard let r = cache[key]! else { return nil }
       let mine = a.id < b.id ? (r.a0, r.a1) : (r.b0, r.b1)
-      return Found(start: a.offset + frameToSec(mine.0), end: a.offset + frameToSec(mine.1))
+      let theirs = a.id < b.id ? (r.b0, r.b1) : (r.a0, r.a1)
+      return Found(
+        start: a.offset + frameToSec(mine.0), end: a.offset + frameToSec(mine.1), other: j,
+        otherStart: b.offset + frameToSec(theirs.0), otherEnd: b.offset + frameToSec(theirs.1), seg: r)
     }
-    func overlaps(_ x: Found, _ y: Found) -> Bool {
-      min(x.end, y.end) - max(x.start, y.start) >= 0.5 * min(x.end - x.start, y.end - y.start)
-    }
-    func span(_ arr: [Found]) -> Double { arr.reduce(0.0) { $0 + $1.end - $1.start } }
-    func bestCluster(_ found: [Found]) -> [Found] {
-      var best: [Found] = []
-      for c in found {
-        let cluster = found.filter { overlaps(c, $0) }
-        if cluster.count > best.count || (cluster.count == best.count && span(cluster) > span(best)) { best = cluster }
-      }
-      return best
-    }
-    func median(_ xs: [Double]) -> Double {
-      let s = xs.stableSorted(by: numCompare)
-      let m = s.count >> 1
-      return s.count % 2 == 1 ? s[m] : (s[m - 1] + s[m]) / 2
-    }
-
-    var results: [(String, Repeated)] = []
-    var done = Set<String>()
-    for id in targets {
-      guard let index = byId[id], !done.contains(id) else { continue }
-      let me = members[index]
-      if me.fp.isEmpty { continue }
-      var siblings: [Member] = []
+    var surveys: [Int: (found: [Found], compared: Int)] = [:]
+    func survey(_ index: Int) -> (found: [Found], compared: Int) {
+      if let s = surveys[index] { return s }
+      var siblings: [Int] = []
       if members.count > 1 {
         for step in 1..<members.count {
           for idx in [index + step, index - step] where idx >= 0 && idx < members.count && !members[idx].fp.isEmpty {
-            siblings.append(members[idx])
+            siblings.append(idx)
           }
         }
       }
       var found: [Found] = []
       var compared = 0
       for s in siblings.prefix(maxSiblings) {
-        let r = pair(me, s)
+        let r = pair(index, s)
         compared += 1
         if let r { found.append(r) }
         if compared >= minSiblings && bestCluster(found).count >= 2 { break }
       }
-      let cluster = bestCluster(found)
-      // With several references, ask for at least two to agree.
-      if cluster.isEmpty || cluster.count < (compared >= 3 ? 2 : 1) { continue }
+      surveys[index] = (found, compared)
+      return (found, compared)
+    }
+    // With several references, ask for at least two to agree.
+    func agreed(_ s: (found: [Found], compared: Int)) -> [Found]? {
+      let cluster = bestCluster(s.found)
+      return cluster.isEmpty || cluster.count < (s.compared >= 3 ? 2 : 1) ? nil : cluster
+    }
+
+    var results: [(String, Repeated)] = []
+    var unmatched: [(id: String, index: Int)] = []
+    var done = Set<String>()
+    for id in targets {
+      guard let index = byId[id], !done.contains(id) else { continue }
+      if members[index].fp.isEmpty { continue }
       done.insert(id)
+      let s = survey(index)
+      guard let cluster = agreed(s) else {
+        unmatched.append((id, index))
+        continue
+      }
       results.append((id, Repeated(
         start: median(cluster.map(\.start)), end: median(cluster.map(\.end)),
-        support: cluster.count, compared: compared)))
+        support: cluster.count, compared: s.compared)))
+    }
+    guard let rule = pairs else { return results }
+    // The only match of an episode that found no agreement, if it has exactly one.
+    func lone(_ index: Int) -> Found? {
+      let s = survey(index)
+      return agreed(s) == nil && s.found.count == 1 ? s.found[0] : nil
+    }
+    for (id, index) in unmatched {
+      guard let f = lone(index), lone(f.other)?.other == index else { continue }
+      if f.seg.len < rule.minFrames || f.seg.mean > rule.maxBits { continue }
+      if let shift = rule.maxShift, abs(f.start - f.otherStart) > shift { continue }
+      results.append((id, Repeated(start: f.start, end: f.end, support: 1, compared: survey(index).compared, pair: true)))
     }
     return results
+  }
+
+  /// An episode that shares nothing with its own season can share its intro (or
+  /// credits) with another season's: a premiere re-edited with a later
+  /// season's titles, say. `others` are those episodes, nearest first, and as
+  /// in a season two of them must agree. With `whole`, the part this episode
+  /// shares with them must also be (nearly) all of what those two share with
+  /// each other, so a pilot whose own opening song quotes the theme does not
+  /// pass the quote off as its intro.
+  static func detectFromOthers(
+    _ me: Member, _ others: [Member], _ opts: MatchOptions, whole: Double? = nil, minCompared: Int = 4
+  ) -> Repeated? {
+    if me.fp.isEmpty { return nil }
+    var found: [Found] = []
+    var compared = 0
+    for (k, o) in others.enumerated() where !o.fp.isEmpty {
+      compared += 1
+      if let seg = findSharedSegment(me.fp, o.fp, opts) {
+        found.append(Found(
+          start: me.offset + frameToSec(seg.a0), end: me.offset + frameToSec(seg.a1), other: k,
+          otherStart: o.offset + frameToSec(seg.b0), otherEnd: o.offset + frameToSec(seg.b1), seg: seg))
+      }
+      if compared >= minCompared && bestCluster(found).count >= 2 { break }
+    }
+    let cluster = bestCluster(found)
+    if cluster.count < 2 { return nil }
+    if let whole {
+      let a = cluster[0], b = cluster[1]
+      guard let shared = findSharedSegment(others[a.other].fp, others[b.other].fp, opts) else { return nil }
+      let s0 = others[a.other].offset + frameToSec(shared.a0)
+      let s1 = others[a.other].offset + frameToSec(shared.a1)
+      if min(s1, a.otherEnd) - max(s0, a.otherStart) < whole * (s1 - s0) { return nil }
+    }
+    return Repeated(
+      start: median(cluster.map(\.start)), end: median(cluster.map(\.end)), support: cluster.count, compared: compared)
   }
 
   // ---- The on-disk index -------------------------------------------------------------------

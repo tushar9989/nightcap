@@ -107,6 +107,58 @@ private func byId(_ res: [(id: String, result: FP.Repeated)]) -> [String: FP.Rep
     print("  10 min fingerprint: \(Int(ms.rounded())) ms")
   }
 
+  // A season whose first two episodes share titles no other episode has; the
+  // others share `theme` at varying points.
+  func pairSeason(_ first: [Float], _ second: [Float], opens: (Double, Double)) -> [FP.Member] {
+    (0..<7).map { i in
+      let fp: [Float]
+      switch i {
+      case 0: fp = episode(coldOpen: opens.0, intro: first, body: 60, seed: 140)
+      case 1: fp = episode(coldOpen: opens.1, intro: second, body: 60, seed: 141)
+      default: fp = episode(coldOpen: 12 + Double(i) * 9.1, intro: theme, body: 60, seed: 140 + UInt32(i))
+      }
+      return FP.Member(id: "e\(i)", fp: FP.compute(fp), offset: 0)
+    }
+  }
+
+  t.test("titles only two episodes share count when the pair rule is on") {
+    let own = music(70, 5150)
+    let members = pairSeason(own, own, opens: (20, 24.5))
+    try expect(byId(FP.detectRepeatedSegments(members, ["e0", "e1"]))["e0"] == nil, "found without the pair rule")
+    let res = byId(FP.detectRepeatedSegments(members, members.map(\.id), pairs: FP.PairRule()))
+    for (id, open) in [("e0", 20.0), ("e1", 24.5)] {
+      guard let r = res[id] else { throw TestFailure(description: "\(id) missing") }
+      try expect(r.pair && r.support == 1, "\(id) not a pair: \(r)")
+      try expect(abs(r.start - open) < 1 && abs(r.end - (open + 70)) < 1, "\(id) \(r.start)–\(r.end)")
+    }
+    try expect(res["e2"].map { !$0.pair && $0.support >= 2 } ?? false, "e2 should come from the season rule")
+  }
+
+  t.test("a pair is refused when the shared stretch is short or plays at another point") {
+    let short = music(30, 5151)
+    try expect(byId(FP.detectRepeatedSegments(pairSeason(short, short, opens: (20, 20)), ["e0", "e1"], pairs: FP.PairRule())).isEmpty)
+    // Part one's scene replayed by part two's recap, a minute later than it first played.
+    let scene = music(70, 5152)
+    let members = pairSeason(scene, scene, opens: (5, 65))
+    try expect(byId(FP.detectRepeatedSegments(members, ["e0", "e1"], pairs: FP.PairRule())).isEmpty)
+    try expectEqual(byId(FP.detectRepeatedSegments(members, ["e0", "e1"], pairs: FP.PairRule(maxShift: nil))).count, 2)
+  }
+
+  t.test("an episode matching nothing in its season finds its intro in another season's") {
+    let others = [33.3, 0, 71.9, 18.4].enumerated().map { k, open in
+      FP.Member(id: "o\(k)", fp: FP.compute(episode(coldOpen: open, intro: theme, body: 60, seed: 160 + UInt32(k))), offset: 0)
+    }
+    let me = FP.Member(id: "me", fp: FP.compute(episode(coldOpen: 5.5, intro: theme, body: 60, seed: 170)), offset: 0)
+    guard let r = FP.detectFromOthers(me, others, FP.MatchOptions(), whole: 0.75) else { throw TestFailure(description: "no intro found") }
+    try expect(abs(r.start - 5.5) < 1 && abs(r.end - 65.5) < 1, "\(r.start)–\(r.end)")
+    try expect(r.support >= 2 && !r.pair, "\(r)")
+    // Only half of the theme, quoted in an opening song of its own: not the intro.
+    let quote = Array(theme[(15 * SR)..<(45 * SR)])
+    let pilot = FP.Member(id: "pilot", fp: FP.compute(episode(coldOpen: 40, intro: quote, body: 90, seed: 171)), offset: 0)
+    try expect(FP.detectFromOthers(pilot, others, FP.MatchOptions()) != nil, "the quote should match")
+    try expect(FP.detectFromOthers(pilot, others, FP.MatchOptions(), whole: 0.75) == nil, "a quote taken for the intro")
+  }
+
   t.test("a season alternating between two intro versions still finds both") {
     let themeB = music(32, 4321)
     // A A B B B A A: the first two episodes' nearest neighbours mostly use B.

@@ -6,12 +6,13 @@ import Foundation
 // On disk (DATA_DIR):
 //   analysis.json      markers per file, plus manual corrections
 //   fingerprints/*.fp  audio fingerprints of each episode's first and last
-//                      minutes, so adding an episode only fingerprints that
-//                      episode and re-runs the (fast) matching for its season
+//                      minutes (and a longer start where a long cold open
+//                      hides the intro), so adding an episode only fingerprints
+//                      that episode and re-runs the (fast) matching for its season
 
 @MainActor
 final class Analyzer {
-  static let version = 2  // bump to re-run matching (fingerprints are reused)
+  static let version = 3  // bump to re-run matching (fingerprints are reused)
   let fpDir = ensureDir(Paths.data("fingerprints"))
   let store = JsonStore(Paths.data("analysis.json"), defaults: AnalysisData(version: Analyzer.version))
   private let getLibrary: () -> Library
@@ -28,6 +29,9 @@ final class Analyzer {
     var label: String
     var fileIds: [String]
     var refs: [String]
+    /// The nearest episodes of the show's other seasons, for episodes that
+    /// match nothing in their own.
+    var wider: [String] = []
     var priority: Double = 0
   }
 
@@ -57,15 +61,25 @@ final class Analyzer {
         let others = (i + 1 < regular.count ? regular[i + 1].episodes : []) + (i > 0 ? regular[i - 1].episodes : [])
         refs = Array(others.prefix(max(0, 4 - s.episodes.count))).filter { lib.files[$0] != nil }
       }
+      // The next season's first episodes and the previous season's last, in turn.
+      let after = regular[(i + 1)...].flatMap(\.episodes).filter { lib.files[$0] != nil }
+      let before = regular[..<i].reversed().flatMap { $0.episodes.reversed() }.filter { lib.files[$0] != nil }
+      var wider: [String] = []
+      for k in 0..<min(max(after.count, before.count), AnalysisJob.widerCount) {
+        if k < after.count { wider.append(after[k]) }
+        if k < before.count { wider.append(before[k]) }
+      }
       return Group(
         key: "\(title.id):\(s.id)", titleId: title.id, seasonId: s.id, kind: "show", label: "\(title.name) · \(s.name)",
-        fileIds: s.episodes, refs: refs)
+        fileIds: s.episodes, refs: refs, wider: Array(wider.prefix(AnalysisJob.widerCount)))
     }
   }
 
   func basis(_ g: Group) -> String {
     let files = getLibrary().files
-    return hashId((g.fileIds + ["|"] + g.refs).map { id in files[id].map { "\(id):\(fileSig($0))" } ?? id }.joined(separator: ","))
+    return hashId(
+      (g.fileIds + ["|"] + g.refs + ["|"] + g.wider).map { id in files[id].map { "\(id):\(fileSig($0))" } ?? id }
+        .joined(separator: ","))
   }
 
   private func needsWork(_ g: Group) -> Bool {
@@ -198,7 +212,9 @@ final class Analyzer {
     for id in group.fileIds { if let d = await describe(id) { files.append(d) } }
     var refs: [AnalysisJob.File] = []
     for id in group.refs { if let d = await describe(id) { refs.append(d) } }
-    let job = AnalysisJob(kind: group.kind, files: files, refs: refs, fpDir: fpDir, ffmpeg: ffmpeg)
+    var wider: [AnalysisJob.File] = []
+    for id in group.wider { if let d = await describe(id) { wider.append(d) } }
+    let job = AnalysisJob(kind: group.kind, files: files, refs: refs, wider: wider, fpDir: fpDir, ffmpeg: ffmpeg)
     let key = group.key
     let results = await Task.detached(priority: .utility) {
       await job.run { done, total in
@@ -232,7 +248,7 @@ final class Analyzer {
     }
     if changed { store.save() }
     let keep = Set(getLibrary().files.values.map { "\($0.id)-\(sigHash($0))" })
-    let tail = Re(#"-(head|tail)\.fp$"#)
+    let tail = Re(#"-(head|longhead|tail)\.fp$"#)
     for name in (try? FileManager.default.contentsOfDirectory(atPath: fpDir)) ?? [] {
       let stem = tail.replace(name, "", global: false)
       if !keep.contains(stem) { removeItem(join(fpDir, name)) }
@@ -261,8 +277,16 @@ struct AnalysisJob: Sendable {
   var kind: String
   var files: [File]
   var refs: [File]
+  /// Other seasons' episodes, fingerprinted only when an episode matches
+  /// nothing in its own season.
+  var wider: [File] = []
   var fpDir: String
   var ffmpeg: String
+
+  static let widerCount = 8
+  static let introPairs = FP.PairRule()
+  // Credits start wherever the episode ends, so where they start is no test.
+  static let creditPairs = FP.PairRule(maxShift: nil)
 
   static let intro: FP.MatchOptions = {
     var o = FP.MatchOptions()
@@ -286,6 +310,11 @@ struct AnalysisJob: Sendable {
 
   static func headWindow(_ dur: Double) -> (start: Double, len: Double) {
     (0, dur > 0 ? min(dur, max(120, min(dur * 0.25, 600))) : 600)
+  }
+
+  /// Where to look for an intro that a long cold open pushes past the head window.
+  static func longHeadWindow(_ dur: Double) -> (start: Double, len: Double) {
+    (0, min(dur, max(120, min(dur * 0.4, 1200))))
   }
 
   static func tailWindow(_ dur: Double, movie: Bool = false) -> (start: Double, len: Double)? {
@@ -312,7 +341,13 @@ struct AnalysisJob: Sendable {
   /// Loads the fingerprint for a part of a file from the index on disk, or
   /// computes and stores it.
   private func fingerprint(_ f: File, _ part: String) async throws -> (fp: [UInt32], offset: Double) {
-    guard let win = part == "head" ? AnalysisJob.headWindow(f.duration) : AnalysisJob.tailWindow(f.duration) else { return ([], 0) }
+    let window: (start: Double, len: Double)?
+    switch part {
+    case "head": window = AnalysisJob.headWindow(f.duration)
+    case "longhead": window = AnalysisJob.longHeadWindow(f.duration)
+    default: window = AnalysisJob.tailWindow(f.duration)
+    }
+    guard let win = window else { return ([], 0) }
     let cache = join(fpDir, "\(f.id)-\(f.sig)-\(part).fp")
     if let data = FileManager.default.contents(atPath: cache), let hit = FP.decode(data), abs(hit.offset - win.start) < 0.01 {
       return (hit.fp, hit.offset)
@@ -465,6 +500,12 @@ struct AnalysisJob: Sendable {
 
   private static func round1(_ x: Double) -> Double { jsRound(x * 10) / 10 }
 
+  /// How a repeated segment was found, as the player's "Intro & credits" panel shows it.
+  static func describe(_ r: FP.Repeated, elsewhere: Bool) -> String {
+    if r.pair { return "audio (shared with one other episode)" }
+    return "audio (\(r.support)/\(r.compared) episodes \(elsewhere ? "of other seasons " : "")agree)"
+  }
+
   private func showJob(_ progress: @Sendable (Int, Int) -> Void) async -> [(String, Result)] {
     let all = files + refs
     var heads: [FP.Member] = []
@@ -489,22 +530,69 @@ struct AnalysisJob: Sendable {
     }
     let targets = files.map(\.id)
     var intros: [String: FP.Repeated] = [:]
-    for (id, r) in FP.detectRepeatedSegments(heads, targets, AnalysisJob.intro) { intros[id] = r }
+    for (id, r) in FP.detectRepeatedSegments(heads, targets, AnalysisJob.intro, pairs: AnalysisJob.introPairs) { intros[id] = r }
     var credits: [String: FP.Repeated] = [:]
-    for (id, r) in FP.detectRepeatedSegments(tails, targets, AnalysisJob.credits) { credits[id] = r }
+    for (id, r) in FP.detectRepeatedSegments(tails, targets, AnalysisJob.credits, pairs: AnalysisJob.creditPairs) { credits[id] = r }
+
+    // A long cold open can push the intro past the minutes fingerprinted for
+    // every episode. Look further into the episodes that found none, or found
+    // one running into the end of what was fingerprinted.
+    var longHeads: [String: FP.Member] = [:]
+    for (i, f) in files.enumerated() where f.duration > 0 && !heads[i].fp.isEmpty {
+      let h = heads[i]
+      if let r = intros[f.id], r.end < h.offset + FP.frameToSec(h.fp.count - 1) - 1 { continue }
+      if AnalysisJob.longHeadWindow(f.duration).len < AnalysisJob.headWindow(f.duration).len + 15 { continue }
+      if let long = try? await fingerprint(f, "longhead") { longHeads[f.id] = FP.Member(id: f.id, fp: long.fp, offset: long.offset) }
+    }
+    if !longHeads.isEmpty {
+      let further = heads.map { longHeads[$0.id] ?? $0 }
+      let late = targets.filter { longHeads[$0] != nil }
+      for (id, r) in FP.detectRepeatedSegments(further, late, AnalysisJob.intro, pairs: AnalysisJob.introPairs) {
+        // A cut-off intro is only replaced by the whole of it.
+        if let old = intros[id], min(old.end, r.end) <= max(old.start, r.start) { continue }
+        intros[id] = r
+      }
+    }
+
+    // Episodes that still match nothing in their own season: try the nearest
+    // episodes of the show's other seasons.
+    let introMisses = files.indices.filter { intros[files[$0].id] == nil && !heads[$0].fp.isEmpty }
+    let creditMisses = files.indices.filter { credits[files[$0].id] == nil && !tails[$0].fp.isEmpty }
+    var introElsewhere = Set<String>()
+    var creditsElsewhere = Set<String>()
+    if !wider.isEmpty && !(introMisses.isEmpty && creditMisses.isEmpty) {
+      var otherHeads: [FP.Member] = []
+      var otherTails: [FP.Member] = []
+      for w in wider {
+        if !introMisses.isEmpty, let h = try? await fingerprint(w, "head") { otherHeads.append(FP.Member(id: w.id, fp: h.fp, offset: h.offset)) }
+        if !creditMisses.isEmpty, let t = try? await fingerprint(w, "tail") { otherTails.append(FP.Member(id: w.id, fp: t.fp, offset: t.offset)) }
+      }
+      for i in introMisses {
+        if let r = FP.detectFromOthers(longHeads[files[i].id] ?? heads[i], otherHeads, AnalysisJob.intro, whole: 0.75) {
+          intros[files[i].id] = r
+          introElsewhere.insert(files[i].id)
+        }
+      }
+      for i in creditMisses {
+        if let r = FP.detectFromOthers(tails[i], otherTails, AnalysisJob.credits) {
+          credits[files[i].id] = r
+          creditsElsewhere.insert(files[i].id)
+        }
+      }
+    }
 
     var results: [(String, Result)] = []
     for f in files {
       var res = Result()
       if let i = intros[f.id] {
         res.intro = Span(start: i.start < 3 ? 0 : AnalysisJob.round1(i.start), end: AnalysisJob.round1(i.end))
-        res.method["intro"] = "audio (\(i.support)/\(i.compared) episodes agree)"
+        res.method["intro"] = AnalysisJob.describe(i, elsewhere: introElsewhere.contains(f.id))
       }
       if let c = credits[f.id], f.duration == 0 || c.start > f.duration * 0.5 {
         var start = c.start
         if let refined = try? await refineStart(f, c.start) { start = refined }
         res.credits = Mark(start: AnalysisJob.round1(start))
-        res.method["credits"] = "audio (\(c.support)/\(c.compared) episodes agree)"
+        res.method["credits"] = AnalysisJob.describe(c, elsewhere: creditsElsewhere.contains(f.id))
       } else if let v = try? await videoCredits(f, movie: false) {
         res.credits = Mark(start: AnalysisJob.round1(v))
         res.method["credits"] = "video (text on black)"
