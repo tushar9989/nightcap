@@ -631,31 +631,155 @@ private struct TitleList: View {
   }
 }
 
-/// The season shown: its name as a heading, which opens the list of seasons.
+/// The season shown: its name as a heading, which opens the list of seasons in a
+/// popover, in the app's own rows (as the player's panels have them), not a menu
+/// in the system's type.
 private struct SeasonMenu: View {
   @Environment(WindowModel.self) private var win
   let t: Title
   let selected: Int
+  @State private var open = false
+  /// When the list last closed: the click on the heading that closed it doesn't open it again.
+  @State private var closed = Date.distantPast
 
   var body: some View {
-    Menu {
-      Picker("Season", selection: Binding(get: { selected }, set: { win.setSeason($0) })) {
-        ForEach(Array(t.seasons.enumerated()), id: \.offset) { i, s in Text(s.name).tag(i) }
-      }
-      .pickerStyle(.inline)
-      .labelsHidden()
+    Button {
+      if !open && Date().timeIntervalSince(closed) > 0.3 { open = true }
     } label: {
       HStack(spacing: 6) {
         Text(t.seasons[selected].name).font(.app(.title2, weight: .bold))
         Image(systemName: "chevron.down").font(.callout.weight(.bold)).foregroundStyle(.secondary)
       }
-      .contentShape(Rectangle())
     }
-    .menuStyle(.button)
-    .buttonStyle(.plain)
-    .menuIndicator(.hidden)
+    .buttonStyle(PlainTapStyle())
     .fixedSize()
     .help("Choose a season")
+    .background(
+      AppKitPopover(open: $open, closed: { closed = Date() }) {
+        SeasonList(t: t, selected: selected) { i in
+          open = false
+          win.setSeason(i)
+        }
+      })
+  }
+}
+
+/// An AppKit popover under the view it's behind, shown while `open`. Unlike
+/// SwiftUI's, it gives the keyboard back to what had it (SwiftUI's leaves it in
+/// the sidebar's list), and its look (light or dark) is the page's.
+private struct AppKitPopover<Content: View>: NSViewRepresentable {
+  @Binding var open: Bool
+  let closed: () -> Void
+  @ViewBuilder let content: () -> Content
+
+  func makeCoordinator() -> Coordinator { Coordinator() }
+
+  func makeNSView(context: Context) -> NSView { NSView() }
+
+  func updateNSView(_ view: NSView, context: Context) {
+    let c = context.coordinator
+    c.willClose = {
+      open = false
+      closed()
+    }
+    let look = NSAppearance(named: context.environment.colorScheme == .dark ? .darkAqua : .aqua)
+    if let pop = c.popover {
+      if open {
+        pop.appearance = look
+        (pop.contentViewController as? NSHostingController<Content>)?.rootView = content()
+      } else {
+        // Closed from here (a season was chosen): SwiftUI knows already.
+        c.closeQuietly()
+      }
+    } else if open {
+      let pop = NSPopover()
+      pop.behavior = .transient
+      pop.appearance = look
+      let host = NSHostingController(rootView: content())
+      // As large as the content wants (not as wide as it could stretch).
+      host.sizingOptions = [.preferredContentSize]
+      pop.contentViewController = host
+      pop.delegate = c
+      c.popover = pop
+      c.window = view.window
+      c.keyboard = view.window?.firstResponder
+      pop.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
+    }
+  }
+
+  static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+    coordinator.closeQuietly()
+  }
+
+  @MainActor
+  final class Coordinator: NSObject, NSPopoverDelegate {
+    var popover: NSPopover?
+    /// The one on its way out (kept until it's gone).
+    private var closing: NSPopover?
+    var willClose: (() -> Void)?
+    /// The window it opened from, and what had the keyboard there.
+    weak var window: NSWindow?
+    weak var keyboard: NSResponder?
+
+    /// Closes it without telling SwiftUI, which closed it (changing its state
+    /// while it updates the view would be undefined behaviour).
+    func closeQuietly() {
+      guard let pop = popover else { return }
+      closing = pop
+      popover = nil
+      pop.performClose(nil)
+    }
+
+    /// Closed by AppKit (Escape, a click outside): SwiftUI is told.
+    func popoverWillClose(_ notification: Notification) {
+      guard popover != nil else { return }
+      closing = popover
+      popover = nil
+      willClose?()
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+      closing = nil
+      if let window, window.firstResponder !== keyboard { window.makeFirstResponder(keyboard) }
+    }
+  }
+}
+
+/// The seasons, the one shown ticked; the pointer or the arrow keys light one, Return chooses it.
+private struct SeasonList: View {
+  let t: Title
+  let selected: Int
+  let choose: (Int) -> Void
+  @State private var lit: Int?
+  @FocusState private var focused: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      ForEach(Array(t.seasons.enumerated()), id: \.offset) { i, s in
+        PanelOption(label: s.name, on: i == selected, lit: lit == i) { choose(i) }
+          .onHover { inside in
+            if inside { lit = i } else if lit == i { lit = nil }
+          }
+      }
+    }
+    .padding(6)
+    .frame(minWidth: 180)
+    .focusable()
+    .focusEffectDisabled()
+    .focused($focused)
+    .onAppear { focused = true }
+    .onKeyPress(.upArrow) {
+      lit = lit.map { max(0, $0 - 1) } ?? selected
+      return .handled
+    }
+    .onKeyPress(.downArrow) {
+      lit = lit.map { min(t.seasons.count - 1, $0 + 1) } ?? selected
+      return .handled
+    }
+    .onKeyPress(.return) {
+      choose(lit ?? selected)
+      return .handled
+    }
   }
 }
 

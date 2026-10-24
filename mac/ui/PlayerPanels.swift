@@ -156,15 +156,20 @@ private struct PanelHeading: View {
   }
 }
 
-/// A choice in a column: ticked when on.
-private struct PanelOption: View {
+/// A choice in a column (or in the list of seasons): ticked when on.
+struct PanelOption: View {
   let label: String
   let on: Bool
   /// "Search online…": a + instead of the tick, in blue.
   var more = false
+  /// Lit as under the pointer: set by a list that moves the light itself (with the arrow keys).
+  var lit: Bool? = nil
   let action: () -> Void
   @State private var hovering = false
   @Environment(\.isEnabled) private var enabled
+  @Environment(\.colorScheme) private var scheme
+
+  private var hot: Bool { lit ?? hovering }
 
   var body: some View {
     Button(action: action) {
@@ -180,7 +185,7 @@ private struct PanelOption: View {
       .padding(.vertical, 6)
       .padding(.horizontal, 8)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(hovering && enabled ? 0.1 : 0)))
+      .background(RoundedRectangle(cornerRadius: 8).fill((scheme == .dark ? Color.white : .black).opacity(hot && enabled ? 0.1 : 0)))
       .contentShape(Rectangle())
     }
     .buttonStyle(PlainTapStyle())
@@ -190,7 +195,7 @@ private struct PanelOption: View {
 
   private var style: AnyShapeStyle {
     if more { return AnyShapeStyle(Theme.accent) }
-    return on || hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)
+    return on || hot ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)
   }
 }
 
@@ -768,6 +773,8 @@ private struct EpisodesPanel: View {
   let player: PlayerModel
   let size: CGSize
   @Environment(AppModel.self) private var app
+  /// The seasons shown in the episodes' place, to choose one.
+  @State private var choosing = false
 
   /// A row: 12 + a 120-wide 16:9 picture + 12.
   static let rowHeight: CGFloat = 24 + 120 * 9 / 16
@@ -782,39 +789,82 @@ private struct EpisodesPanel: View {
           Text(t.name).font(.app(size: 17, weight: .bold)).lineLimit(1)
           Spacer(minLength: 0)
           if t.seasons.count > 1 {
-            Picker("Season", selection: Binding(get: { season }, set: { player.panelSeason = $0 })) {
-              ForEach(Array(t.seasons.enumerated()), id: \.offset) { i, s in Text(s.name).tag(i) }
+            Button { choosing.toggle() } label: {
+              PanelSeasonLabel(name: t.seasons[season].name, open: choosing)
             }
-            .pickerStyle(.menu)
-            .labelsHidden()
+            .buttonStyle(PlainTapStyle())
             .fixedSize()
+            .help("Choose a season")
           }
         }
         .padding(.vertical, 16)
         .padding(.horizontal, 20)
         .overlay(alignment: .bottom) { panelLine.frame(height: 1) }
-        ScrollViewReader { proxy in
-          ScrollView(.vertical) {
-            LazyVStack(spacing: 0) {
-              ForEach(episodes, id: \.self) { e in
-                PanelEpisodeRow(fid: e, current: e == fid) { player.playEpisode(e) }
-                  .id(e)
+        // The episodes stay (hidden) under the seasons: the panel keeps its height, and its place in the list.
+        ZStack(alignment: .top) {
+          ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+              LazyVStack(spacing: 0) {
+                ForEach(episodes, id: \.self) { e in
+                  PanelEpisodeRow(fid: e, current: e == fid) { player.playEpisode(e) }
+                    .id(e)
+                }
               }
             }
+            .frame(maxHeight: CGFloat(episodes.count) * EpisodesPanel.rowHeight)
+            .onAppear {
+              // Once the rows are laid out.
+              Task { @MainActor in proxy.scrollTo(fid, anchor: .center) }
+            }
+            .onChange(of: season) {
+              proxy.scrollTo(episodes.contains(fid) ? fid : episodes.first ?? fid, anchor: .center)
+            }
           }
-          .frame(maxHeight: CGFloat(episodes.count) * EpisodesPanel.rowHeight)
-          .onAppear {
-            // Once the rows are laid out.
-            Task { @MainActor in proxy.scrollTo(fid, anchor: .center) }
-          }
-          .onChange(of: season) {
-            proxy.scrollTo(episodes.contains(fid) ? fid : episodes.first ?? fid, anchor: .center)
+          .opacity(choosing ? 0 : 1)
+          .allowsHitTesting(!choosing)
+          .accessibilityHidden(choosing)
+          if choosing {
+            HugLayout {
+              seasons(t, season).hidden()
+              ScrollView(.vertical) { seasons(t, season) }
+            }
           }
         }
+        .animation(.easeOut(duration: 0.15), value: choosing)
       }
       .frame(width: min(520, size.width * 0.92))
       .task(id: season) { app.engine.prioritizePreviews(episodes) }
     }
+  }
+
+  private func seasons(_ t: Title, _ season: Int) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      ForEach(Array(t.seasons.enumerated()), id: \.offset) { i, s in
+        PanelOption(label: s.name, on: i == season) {
+          player.panelSeason = i
+          choosing = false
+        }
+      }
+    }
+    .padding(.vertical, 10)
+    .padding(.horizontal, 12)
+  }
+}
+
+/// The season shown in the Episodes panel, which shows the seasons in the episodes' place: a small grey button.
+private struct PanelSeasonLabel: View {
+  let name: String
+  let open: Bool
+  @State private var hovering = false
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Text(name).font(.app(size: 14, weight: .semibold)).lineLimit(1)
+      Image(systemName: open ? "chevron.up" : "chevron.down").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+    }
+    .padding(EdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 9))
+    .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(hovering || open ? 0.18 : 0.1)))
+    .onHover { hovering = $0 }
   }
 }
 

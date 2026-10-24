@@ -219,9 +219,9 @@ private struct TopBar: View {
       let f = app.file(fid)
       let t = player.title
       VStack(alignment: .leading, spacing: 1) {
-        Text(t?.name ?? f?.name ?? "").font(.app(.headline))
+        Text(t?.name ?? f?.name ?? "").font(.app(.title3, weight: .bold))
         if t?.isShow == true {
-          Text("\(app.epCode(fid)) · \(f?.name ?? "")").font(.app(.subheadline)).foregroundStyle(.secondary)
+          Text("\(app.epCode(fid)) · \(f?.name ?? "")").font(.app(.body)).foregroundStyle(.secondary)
         }
       }
       .lineLimit(1)
@@ -465,7 +465,7 @@ private struct ControlsRow: View {
       PlayerButton(icon: "goforward.10", help: "Forward 10 s (→)") { player.seek(player.time + 10) }
       VolumeControl(player: player)
       Text(midTitle)
-        .font(.app(.callout))
+        .font(.app(.body))
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.tail)
