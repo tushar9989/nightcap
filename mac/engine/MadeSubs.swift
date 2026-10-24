@@ -1,15 +1,17 @@
 import AppKit
 import AVFoundation
 import Foundation
+import SoundAnalysis
 import Speech
 
 // English subtitles made on this Mac from a video's dialogue. Apple's speech
 // recogniser (SpeechTranscriber, on device) hears the words and when each is
 // said; each name's spellings are made one, spelt as written where the name is
 // expected (ShowNames: the episode's characters from TVmaze, names the user
-// taught); the words become cues the way subtitle style guides ask. About 30 s
-// for a 45-minute episode. Kept with the downloaded subtitles (OnlineSubs), as
-// provider "nightcap".
+// taught); the words become cues the way subtitle style guides ask. Songs are
+// left out, as subtitles leave out lyrics: Apple's sound classifier hears where
+// singing is. About 30 s for a 45-minute episode. Kept with the downloaded
+// subtitles (OnlineSubs), as provider "nightcap".
 //
 // Measured on three X-Files episodes against their published subtitles: 88-94 %
 // of the words found, 98.5-99.8 % of them shown within half a second of when
@@ -50,8 +52,10 @@ enum MadeSubs {
   // ---- Hearing -----------------------------------------------------------------------
 
   /// The words of audio track `audio` (the n-th audio stream), one list per
-  /// stretch of speech the recogniser reports.
-  static func hear(_ path: String, audio: Int, progress: @escaping @Sendable (Step) -> Void) async throws -> [[Word]] {
+  /// stretch of speech the recogniser reports, and where songs are sung in it.
+  static func hear(
+    _ path: String, audio: Int, progress: @escaping @Sendable (Step) -> Void
+  ) async throws -> (words: [[Word]], sung: [ClosedRange<Double>]) {
     guard let ffmpeg = Tools.ffmpeg else { throw Failure(message: "ffmpeg is needed to read the audio") }
     guard SpeechTranscriber.isAvailable else { throw Failure(message: "This Mac can’t recognise speech") }
     guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: "en_US")) else {
@@ -90,6 +94,8 @@ enum MadeSubs {
     guard seconds > 0 else { throw Failure(message: "The audio track is empty") }
 
     progress(.listening(0))
+    // Songs are told apart while the words are heard (the classifier finishes first).
+    async let sung = singing(URL(fileURLWithPath: wav))
     let collector = Task { () throws -> [[Word]] in
       var out: [[Word]] = []
       var shown = 0
@@ -118,7 +124,108 @@ enum MadeSubs {
     }
     let heard = try await collector.value
     _ = analyzer
-    return heard
+    return (heard, await sung)
+  }
+
+  // ---- Songs -------------------------------------------------------------------------
+
+  /// Where songs are sung, by Apple's sound classifier (SoundAnalysis, on this
+  /// Mac): it rates each second of the audio, every half second, for speech,
+  /// singing, music and some 300 other sounds (about 15 s for a 45-minute
+  /// episode, less than hearing the words takes). Nothing when it can't run.
+  static func singing(_ url: URL) async -> [ClosedRange<Double>] {
+    do {
+      let request = try SNClassifySoundRequest(classifierIdentifier: .version1)
+      request.windowDuration = CMTime(seconds: 1, preferredTimescale: 48000)
+      request.overlapFactor = 0.5
+      let ratings = Ratings()
+      let analyzer = try SNAudioFileAnalyzer(url: url)
+      try analyzer.add(request, withObserver: ratings)
+      let finished = await withCheckedContinuation { c in analyzer.analyze { c.resume(returning: $0) } }
+      if !finished { logLine("[subs] songs not told apart: the sound classifier stopped") }
+      return sungStretches(ratings.rated.stableSorted { numCompare($0.start, $1.start) })
+    } catch {
+      logLine("[subs] songs not told apart: \(error.localizedDescription)")
+      return []
+    }
+  }
+
+  /// A second of audio as the classifier rated it: how sure it is that it is sung, and said.
+  struct Rated {
+    var start: Double
+    var duration: Double
+    var singing: Double
+    var speech: Double
+  }
+
+  /// The sung stretches among rated seconds (in order, half overlapping). Through
+  /// a song the singing score wavers, 0.3 to 0.7 with dips, and the voice often
+  /// rates as speech too; through talk it stays near 0. So a second counts as
+  /// sung when the score averaged over it and four neighbours each side (about
+  /// 5 s) is 0.2 or more, unless it rates as speech by 0.4 more than as singing:
+  /// a line said over a jukebox's song stays. A sung second stands for its
+  /// middle half; touching ones join, and stretches under 4 s don't count.
+  static func sungStretches(_ rated: [Rated]) -> [ClosedRange<Double>] {
+    var sum = [0.0]
+    for r in rated { sum.append(sum[sum.count - 1] + r.singing) }
+    var out: [ClosedRange<Double>] = []
+    for (i, r) in rated.enumerated() {
+      let lo = max(0, i - 4), hi = min(rated.count, i + 5)
+      guard (sum[hi] - sum[lo]) / Double(hi - lo) >= 0.2, r.speech - r.singing < 0.4 else { continue }
+      let a = r.start + r.duration / 4, b = r.start + r.duration * 3 / 4
+      if let last = out.last, a <= last.upperBound + 0.01 {
+        out[out.count - 1] = last.lowerBound...max(last.upperBound, b)
+      } else {
+        out.append(a...b)
+      }
+    }
+    return out.filter { $0.upperBound - $0.lowerBound >= 4 }
+  }
+
+  /// Collects the classifier's ratings as they come.
+  private final class Ratings: NSObject, SNResultsObserving, @unchecked Sendable {
+    var rated: [Rated] = []
+
+    func request(_ request: SNRequest, didProduce result: SNResult) {
+      guard let r = result as? SNClassificationResult else { return }
+      rated.append(Rated(
+        start: r.timeRange.start.seconds, duration: r.timeRange.duration.seconds,
+        singing: r.classification(forIdentifier: "singing")?.confidence ?? 0,
+        speech: r.classification(forIdentifier: "speech")?.confidence ?? 0))
+    }
+  }
+
+  /// Words sung rather than said (a song over a montage) are left out, as
+  /// subtitles leave out lyrics: those whose middle lies in a sung stretch, and
+  /// a word or two heard between sung ones (the classifier wavers within a
+  /// song). A stretch of speech breaks where they were.
+  static func dropSung(_ segments: [[Word]], _ sung: [ClosedRange<Double>]) -> [[Word]] {
+    if sung.isEmpty { return segments }
+    func isSung(_ t: Double) -> Bool {
+      // The last stretch starting at or before t.
+      var lo = 0, hi = sung.count
+      while lo < hi {
+        let mid = (lo + hi) / 2
+        if sung[mid].lowerBound <= t { lo = mid + 1 } else { hi = mid }
+      }
+      return lo > 0 && sung[lo - 1].contains(t)
+    }
+    var out: [[Word]] = []
+    for seg in segments {
+      let sungWord = seg.map { isSung((onset($0) + $0.e) / 2) }
+      var i = 0
+      while i < seg.count {
+        if sungWord[i] {
+          i += 1
+          continue
+        }
+        var j = i
+        while j < seg.count && !sungWord[j] { j += 1 }
+        if !(j - i <= 2 && i > 0 && j < seg.count) { out.append(Array(seg[i..<j])) }
+        i = j
+      }
+    }
+    return out
   }
 
   // ---- Names -------------------------------------------------------------------------
@@ -303,7 +410,7 @@ enum MadeSubs {
   static func cues(_ segments: [[Word]]) -> [Cue] {
     var parts: [([Word], [String]?)] = []
     for seg in segments {
-      for sentence in sentences(dropFillers(seg)) where !sentence.isEmpty {
+      for sentence in sentences(dropFillers(dropMarks(seg))) where !sentence.isEmpty {
         for part in fits(sentence) ? [sentence] : split(sentence) { parts.append((part, nil)) }
       }
     }
@@ -349,6 +456,27 @@ enum MadeSubs {
 
   /// Titles written with a full stop, which is not the end of a sentence.
   static let abbreviations: Set<String> = ["mr.", "mrs.", "ms.", "dr.", "prof.", "st.", "lt.", "col.", "sgt.", "capt.", "gen.", "rev."]
+
+  private static let marks: Set<Character> = [",", ".", "?", "!", "…", ";", ":", "-", "–", "—"]
+
+  /// Marks heard on their own (", , ," over music, "Al. .") are left out; one
+  /// ending a sentence passes its full stop back to a word without one.
+  static func dropMarks(_ ws: [Word]) -> [Word] {
+    var out: [Word] = []
+    for w in ws {
+      guard w.t.allSatisfy(marks.contains) else {
+        out.append(w)
+        continue
+      }
+      let end = String(w.t.reversed().prefix { stops.contains($0) }.reversed())
+      if !end.isEmpty, let last = out.last, !(last.t.last.map(stops.contains) ?? false) {
+        var t = last.t
+        if let c = t.last, c == "," || c == ";" || c == ":" { t.removeLast() }
+        out[out.count - 1].t = t + end
+      }
+    }
+    return out
+  }
 
   /// "Uh, I think" → "I think"; a filler ending a sentence passes its full stop back.
   static func dropFillers(_ ws: [Word]) -> [Word] {
@@ -529,12 +657,15 @@ final class SubtitleMaker {
         let heard = try await MadeSubs.hear(path, audio: audio) { step in
           DispatchQueue.main.async { MainActor.assumeIsolated { progress(step) } }
         }
+        let said = MadeSubs.dropSung(heard.words, heard.sung)
         let found = await names()
-        let named = MadeSubs.settleNames(heard, known: MadeSubs.dictionaryKnows, names: found.names)
+        let named = MadeSubs.settleNames(said, known: MadeSubs.dictionaryKnows, names: found.names)
         let cues = MadeSubs.cues(named)
         guard !cues.isEmpty else { throw MadeSubs.Failure(message: "No speech was heard in this audio track") }
-        logLine("[subs] made \(f.name) (audio \(audio)): \(heard.reduce(0) { $0 + $1.count }) words, \(cues.count) cues in "
-          + "\(toFixed(Date().timeIntervalSince(t0), 1)) s; \(found.names.count) names expected\(found.fromTVmaze ? " (TVmaze)" : "")")
+        let count = { (ws: [[MadeSubs.Word]]) in ws.reduce(0) { $0 + $1.count } }
+        logLine("[subs] made \(f.name) (audio \(audio)): \(count(said)) words (\(count(heard.words) - count(said)) sung, left out), "
+          + "\(cues.count) cues in \(toFixed(Date().timeIntervalSince(t0), 1)) s; "
+          + "\(found.names.count) names expected\(found.fromTVmaze ? " (TVmaze)" : "")")
         return (MadeSubs.vtt(cues), found)
       }
       return try keep(vtt, found)

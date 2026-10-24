@@ -26,6 +26,52 @@ private final class Steps {
     try expectEqual(out.map(\.t), ["I", "think", "so.", "Then"])
   }
 
+  t.test("made subtitles leave out marks heard on their own; a full stop passes back to a word without one") {
+    try expectEqual(MadeSubs.dropMarks([w(",", 0, 1), w(",", 1, 2), w(",", 2, 3)]), [])
+    try expectEqual(MadeSubs.dropMarks(said(", All of my life,", from: 0)).map(\.t), ["All", "of", "my", "life,"])
+    try expectEqual(MadeSubs.dropMarks(said("Good morning, Al. .", from: 0)).map(\.t), ["Good", "morning,", "Al."])
+    try expectEqual(MadeSubs.dropMarks(said("! No! Clear, !", from: 0)).map(\.t), ["No!", "Clear!"])
+    try expectEqual(MadeSubs.dropMarks(said("Tom & Jerry, 5 - 4", from: 0)).map(\.t), ["Tom", "&", "Jerry,", "5", "4"])
+    try expectEqual(MadeSubs.cues([[w(",", 3.9, 4.8)], [w("!", 37, 38)]]), [])
+  }
+
+  t.test("sung stretches: the singing score averaged over about 5 s reaches 0.2, for 4 s or more; talk over it stays") {
+    // Seconds rated every half second: talk, a song wavering 0.1-0.6 (the voice also rated a
+    // little as speech), talk.
+    func rate(_ singing: [Double], speech: (Int) -> Double = { _ in 0.3 }) -> [MadeSubs.Rated] {
+      singing.enumerated().map { MadeSubs.Rated(start: Double($0.offset) * 0.5, duration: 1, singing: $0.element, speech: speech($0.offset)) }
+    }
+    let scores = Array(repeating: 0.02, count: 20) + (0..<40).map { [0.5, 0.1, 0.6, 0.3][$0 % 4] } + Array(repeating: 0.02, count: 20)
+    let song = MadeSubs.sungStretches(rate(scores))
+    // The song is rated from 10 s to 30.5 s: its seconds' middle halves, 10.25 to 30.25 s.
+    try expectEqual(song.count, 1)
+    try expect(abs(song[0].lowerBound - 10.25) < 0.01 && abs(song[0].upperBound - 30.25) < 0.01, "\(song)")
+    // A line said over the song (rated far surer speech, 19 to 21.5 s) is not sung; the song
+    // either side still is.
+    let talkedOver = MadeSubs.sungStretches(rate(scores) { $0 >= 38 && $0 < 42 ? 0.9 : 0.3 }.enumerated().map { i, r in
+      var r = r
+      if i >= 38 && i < 42 { r.singing = 0.1 }
+      return r
+    })
+    try expectEqual(talkedOver.count, 2)
+    try expect(talkedOver[0].upperBound <= 19.25 && talkedOver[1].lowerBound >= 20.75, "\(talkedOver)")
+    // A voice that sounds a little sung for a moment is talk.
+    try expectEqual(MadeSubs.sungStretches(rate((0..<60).map { $0 >= 20 && $0 < 23 ? 0.4 : 0.02 })), [])
+    try expectEqual(MadeSubs.sungStretches([]), [])
+  }
+
+  t.test("made subtitles leave out words sung, and the stretch of speech breaks there") {
+    let heard = said("We got it. All of my life I've been waiting. Come on, go.", from: 10, each: 0.5)
+    let out = MadeSubs.dropSung([heard], [11.6...15.0])
+    try expectEqual(out.map(MadeSubs.text), ["We got it.", "Come on, go."])
+    // "my" heard between sung words is sung too; three words between them are not.
+    try expectEqual(MadeSubs.dropSung([heard], [11.6...12.6, 12.9...15.0]).map(MadeSubs.text), ["We got it.", "Come on, go."])
+    try expectEqual(MadeSubs.dropSung([heard], [11.6...12.6, 14.1...15.0]).map(MadeSubs.text), ["We got it.", "my life I've", "Come on, go."])
+    try expectEqual(MadeSubs.dropSung([heard], []), [heard])
+    try expectEqual(MadeSubs.dropSung([heard], [0...9, 17...20]), [heard])
+    try expectEqual(MadeSubs.dropSung([heard], [9.5...17]), [])
+  }
+
   t.test("made subtitles: a sentence ends at . ? ! or …, maybe before a closing quote") {
     let parts = MadeSubs.sentences(said("He said \"go.\" She went… Did she?", from: 0))
     try expectEqual(parts.map(MadeSubs.text), ["He said \"go.\"", "She went…", "Did she?"])

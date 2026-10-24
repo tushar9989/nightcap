@@ -185,11 +185,18 @@ audio track playing. The dialogue never leaves the Mac:
   is nearly one of them is spelt as it is written there (Boudhaas, Buddhaas →
   Budahas). Telling the recogniser the names beforehand changes nothing (it
   ignores them), so they are applied right after it has heard the episode.
+- Songs are left out, as subtitles leave out lyrics. While the words are
+  heard, Apple's sound classifier (SoundAnalysis) rates every second of the
+  audio for singing; where a song is sung (the score averaged over about 5 s),
+  the words heard there go, but not a line said over the song. On *Baywatch*'s
+  pilot, whose montages run on songs, about 89 lyric lines became 15, and no
+  line of dialogue went; on three *X-Files* episodes no dialogue went (a camp
+  song in a cold open did).
 - The words become cues the way subtitle style guides ask:
   - one sentence to a cue, a long one broken at a comma, a pause or before a
     conjunction (a title's full stop, as in *Mrs. Budahas*, doesn't end one)
   - at most two lines of 42 characters, and 7 seconds
-  - fillers (uh, um) left out
+  - fillers (uh, um), and marks heard on their own (", , ,"), left out
   - a quick exchange shares a two-line cue (speakers aren't told apart, so
     there are no dashes)
 
