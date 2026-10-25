@@ -343,7 +343,7 @@ private struct SubtitlesColumn: View {
         }
       } else {
         PanelButton(
-          label: player.syncing == id ? "Listening to the dialogue…" : "Sync to dialogue",
+          label: player.syncing == id ? player.syncText ?? "Listening to the dialogue…" : "Sync to dialogue",
           help: "Match the subtitles to the dialogue in the audio (runs on this Mac)", full: true
         ) {
           player.syncToAudio()

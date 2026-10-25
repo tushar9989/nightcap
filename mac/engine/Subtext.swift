@@ -150,14 +150,17 @@ enum Subtext {
   }
 
   /// Moves every cue: t -> t * scale + offset (fixes subtitles timed for another
-  /// release, e.g. a constant delay or 25 vs 23.976 fps).
+  /// release, e.g. a constant delay or 25 vs 23.976 fps), each part of subtitles
+  /// timed for another cut by its own offset.
   static func retime(_ vtt: String, _ timing: SubTiming?) -> String {
     let offset = timing?.offset ?? 0, scale = timing?.scale ?? 1
-    if (offset == 0 || offset.isNaN) && scale == 1 { return vtt }
+    if (offset == 0 || offset.isNaN) && scale == 1 && (timing?.parts.count ?? 0) < 2 { return vtt }
     let out = blocks(vtt).compactMap { b -> String? in
       guard let text = b.text else { return b.raw }
-      let s = b.start * scale + offset
-      let e = b.end * scale + offset
+      var shift = timing?.offset(at: b.start) ?? 0
+      if shift.isNaN { shift = 0 }
+      let s = b.start * scale + shift
+      let e = b.end * scale + shift
       if e <= 0 { return nil }
       let timingLine = "\(fmtTime(jsMax(0, s))) --> \(fmtTime(e))\(b.settings.isEmpty ? "" : " \(b.settings)")"
       return (b.head + [timingLine, text]).joined(separator: "\n")

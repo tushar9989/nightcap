@@ -85,8 +85,9 @@ final class PlayerModel {
   private(set) var audio = 0
   private(set) var subId: String?
   private(set) var subDelay = 0.0
-  /// The track being synced to the dialogue.
+  /// The track being synced to the dialogue, and how far hearing its words has got.
   private(set) var syncing: String?
+  private(set) var syncText: String?
   /// How far making subtitles from the dialogue has got, while it runs.
   private(set) var making: String?
   /// The made line being fixed, and the last fix (the Subtitles menu can undo it).
@@ -663,14 +664,23 @@ final class PlayerModel {
     if runs != clock.subs { clock.subs = runs }
   }
 
-  /// Fits the selected track to the dialogue (about 3 s, on this Mac).
+  /// Fits the selected track to the dialogue, on this Mac: to the words heard when
+  /// it and the audio are English (about 35 s, nothing when heard already), else to
+  /// the loudness of speech (about 3 s).
   func syncToAudio() {
     guard let id = subId, let fid, syncing == nil else { return }
     syncing = id
+    syncText = nil
     Task {
-      defer { syncing = nil }
+      defer {
+        syncing = nil
+        syncText = nil
+      }
       do {
-        let r = try await app.engine.syncSubtitle(fid, id, audio: audio)
+        let r = try await app.engine.syncSubtitle(fid, id, audio: audio) { [weak self] step in
+          guard let self, self.syncing == id else { return }
+          syncText = PlayerModel.makingText(step)
+        }
         guard self.fid == fid else { return }
         setTrackSync(id, r.sync)
         if r.result.applied || r.result.inSync {
@@ -912,6 +922,14 @@ final class PlayerModel {
         addTrack(track)
         closePanel()
         selectSubtitle(track.id)
+        // Not made for this file: fitted to the loudness of speech already, now to the words.
+        if track.hashMatch != true, await app.engine.canSyncByWords(fid, track.id, audio: audio), seq == openSeq,
+          subId == track.id, syncing == nil
+        {
+          win?.toast("Subtitles added: \(track.label). Matching them to the dialogue’s words…", ms: 4000)
+          syncToAudio()
+          return
+        }
         let synced = track.sync.map { " (synced to the dialogue: \(describeSync($0)))" } ?? ""
         win?.toast("Subtitles added: \(track.label)\(synced)", ms: 4000)
       } catch {
@@ -1245,6 +1263,15 @@ final class PlayerModel {
         }
       }
     }
+    // ⌥← / ⌥→: the made line before or after, as the buttons under a paused line (mpv's
+    // Control-arrows, which switch Spaces on a Mac). In the line's field they move by word.
+    if e.modifierFlags.intersection([.command, .control, .option, .shift]) == .option, [123, 124].contains(e.keyCode),
+      canFixLine, !(win?.window?.firstResponder is NSText)
+    {
+      showLine(e.keyCode == 123 ? -1 : 1)
+      showControls()
+      return true
+    }
     if !e.modifierFlags.intersection([.command, .control, .option]).isEmpty { return false }
     if win?.window?.firstResponder is NSText { return false }  // typing in a field
     guard let k = e.characters, let scalar = k.unicodeScalars.first, k.unicodeScalars.count == 1 else { return false }
@@ -1324,11 +1351,15 @@ func fmtDelay(_ d: Double) -> String {
   d != 0 ? "\(d > 0 ? "+" : "−")\(fixedNumber(abs(d), 2)) s" : "0 s"
 }
 
-/// "3.6 s earlier, frame rate fixed" for a stored correction.
+/// "3.6 s earlier, frame rate fixed" for a stored correction; "in 7 parts (another cut)".
 func describeSync(_ sync: SubTiming?) -> String {
   guard let sync else { return "" }
   var parts: [String] = []
-  if abs(sync.offset) >= 0.05 { parts.append("\(fixedNumber(abs(sync.offset), 1)) s \(sync.offset < 0 ? "earlier" : "later")") }
+  if sync.parts.count > 1 {
+    parts.append("in \(sync.parts.count) parts (another cut)")
+  } else if abs(sync.offset) >= 0.05 {
+    parts.append("\(fixedNumber(abs(sync.offset), 1)) s \(sync.offset < 0 ? "earlier" : "later")")
+  }
   if sync.scale != 1 { parts.append("frame rate fixed") }
   return parts.isEmpty ? "checked" : parts.joined(separator: ", ")
 }

@@ -51,6 +51,20 @@ enum MadeSubs {
 
   // ---- Hearing -----------------------------------------------------------------------
 
+  /// A language code ("en", "eng", "en-US") that is English, or none ("", "und").
+  static func mayBeEnglish(_ code: String?) -> Bool {
+    let c = (code ?? "").jsLowercased
+    return c.isEmpty || c == "und" || c == "en" || c == "eng" || c.hasPrefix("en-") || c.hasPrefix("en_")
+  }
+
+  /// Apple's English speech model is on this Mac (hearing then downloads nothing).
+  static func canHearEnglish() async -> Bool {
+    guard SpeechTranscriber.isAvailable,
+      let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: "en_US"))
+    else { return false }
+    return await SpeechTranscriber.installedLocales.contains { $0.identifier == locale.identifier }
+  }
+
   /// The words of audio track `audio` (the n-th audio stream), one list per
   /// stretch of speech the recogniser reports, and where songs are sung in it.
   static func hear(
@@ -634,8 +648,38 @@ enum MadeSubs {
 /// audio track once even when asked twice.
 @MainActor
 final class SubtitleMaker {
+  typealias Heard = (words: [[MadeSubs.Word]], sung: [ClosedRange<Double>])
+
   private let limit = Limiter(1)
   private var inflight: [String: Task<SubtitleTrack, Error>] = [:]
+  private var hearing: [String: Task<Heard, Error>] = [:]
+  /// What the last two videos' audio tracks were heard to say: making subtitles and
+  /// fitting others to the words share one hearing.
+  private var lastHeard: [(key: String, heard: Heard)] = []
+
+  /// The words of audio track `audio` of `f` (MadeSubs.hear), heard once; `progress`
+  /// hears how far it has got (a second caller while it is heard only gets the result).
+  func heard(_ f: LibraryFile, audio: Int, progress: @escaping @MainActor (MadeSubs.Step) -> Void) async throws -> Heard {
+    let key = "\(f.id)|\(sigHash(f))|\(audio)"
+    if let hit = lastHeard.first(where: { $0.key == key }) { return hit.heard }
+    if let running = hearing[key] { return try await running.value }
+    let path = f.path
+    let task = Task { () throws -> Heard in
+      defer { hearing[key] = nil }
+      let heard = try await limit.run {
+        // The main queue keeps the steps in order (separate tasks might not).
+        try await MadeSubs.hear(path, audio: audio) { step in
+          DispatchQueue.main.async { MainActor.assumeIsolated { progress(step) } }
+        }
+      }
+      lastHeard.removeAll { $0.key == key }
+      lastHeard.append((key, heard))
+      if lastHeard.count > 2 { lastHeard.removeFirst() }
+      return heard
+    }
+    hearing[key] = task
+    return try await task.value
+  }
 
   /// Makes WebVTT for audio track `audio` of `f` and hands it to `keep` with the
   /// names it expected, once; `names` gives the names expected in the dialogue
@@ -648,27 +692,20 @@ final class SubtitleMaker {
   ) async throws -> SubtitleTrack {
     let key = "\(f.id)|\(audio)"
     if let running = inflight[key] { return try await running.value }
-    let path = f.path
     let task = Task { () throws -> SubtitleTrack in
       defer { inflight[key] = nil }
-      let (vtt, found) = try await limit.run {
-        let t0 = Date()
-        // The main queue keeps the steps in order (separate tasks might not).
-        let heard = try await MadeSubs.hear(path, audio: audio) { step in
-          DispatchQueue.main.async { MainActor.assumeIsolated { progress(step) } }
-        }
-        let said = MadeSubs.dropSung(heard.words, heard.sung)
-        let found = await names()
-        let named = MadeSubs.settleNames(said, known: MadeSubs.dictionaryKnows, names: found.names)
-        let cues = MadeSubs.cues(named)
-        guard !cues.isEmpty else { throw MadeSubs.Failure(message: "No speech was heard in this audio track") }
-        let count = { (ws: [[MadeSubs.Word]]) in ws.reduce(0) { $0 + $1.count } }
-        logLine("[subs] made \(f.name) (audio \(audio)): \(count(said)) words (\(count(heard.words) - count(said)) sung, left out), "
-          + "\(cues.count) cues in \(toFixed(Date().timeIntervalSince(t0), 1)) s; "
-          + "\(found.names.count) names expected\(found.fromTVmaze ? " (TVmaze)" : "")")
-        return (MadeSubs.vtt(cues), found)
-      }
-      return try keep(vtt, found)
+      let t0 = Date()
+      let heard = try await self.heard(f, audio: audio, progress: progress)
+      let said = MadeSubs.dropSung(heard.words, heard.sung)
+      let found = await names()
+      let named = MadeSubs.settleNames(said, known: MadeSubs.dictionaryKnows, names: found.names)
+      let cues = MadeSubs.cues(named)
+      guard !cues.isEmpty else { throw MadeSubs.Failure(message: "No speech was heard in this audio track") }
+      let count = { (ws: [[MadeSubs.Word]]) in ws.reduce(0) { $0 + $1.count } }
+      logLine("[subs] made \(f.name) (audio \(audio)): \(count(said)) words (\(count(heard.words) - count(said)) sung, left out), "
+        + "\(cues.count) cues in \(toFixed(Date().timeIntervalSince(t0), 1)) s; "
+        + "\(found.names.count) names expected\(found.fromTVmaze ? " (TVmaze)" : "")")
+      return try keep(MadeSubs.vtt(cues), found)
     }
     inflight[key] = task
     return try await task.value

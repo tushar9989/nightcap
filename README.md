@@ -156,14 +156,29 @@ allowance. The password is only sent to OpenSubtitles, never stored.
 - Downloads are kept in `subs-downloaded/` in the data folder; your media
   folders are not touched.
 
-**Sync to the dialogue** (runs locally, about 3 s per episode): the audio is
-turned into a speech-activity curve (voice-band energy above the local noise
-floor, 50 values a second) and correlated with the subtitle cues over offsets
-of ±3 minutes and the usual frame-rate mix-ups (23.976 / 24 / 25 fps). The
-correction is only applied when the fit clearly beats every other offset, so
-subtitles for a different cut or episode are left alone. Downloads not made
-for your exact file are synced automatically; any track can be synced from
-the Subtitles menu, undone, or nudged with G / H.
+**Sync to the dialogue** (runs locally) works two ways:
+
+- **By the words**, for English subtitles on English (or unlabelled) audio,
+  when macOS has its English speech model (syncing never downloads it):
+  Apple's speech recognition hears the episode (about 35 s), and runs of
+  three words found once in the subtitles and once in the dialogue, in the
+  same order, tie the two together, a few thousand per episode. Where their
+  offsets jump and stay jumped, the subtitles were timed for another cut of
+  the video (a scene longer, a longer pause at an ad break), and each part is
+  moved by its own offset; frame-rate mix-ups (23.976 / 24 / 25 fps) are
+  found too. Subtitles for another episode share too few words and are left
+  alone. Tried on *Baywatch* and *X-Files* episodes cut and slowed by known
+  amounts, cues went back to within 0.35 s of their published timing, but
+  for 7 of 10,800 (sounds such as *(tires screeching)* and lines at a cut).
+- **By the loudness of speech**, otherwise (about 3 s per episode): the audio
+  is turned into a speech-activity curve (voice-band energy above the local
+  noise floor, 50 values a second) and correlated with the subtitle cues over
+  offsets of ±3 minutes and the same frame-rate mix-ups, as one offset. The
+  correction is only applied when the fit clearly beats every other offset.
+
+Downloads not made for your exact file are synced automatically (by the
+loudness at once, then by the words); any track can be synced from the
+Subtitles menu, undone, or nudged with G / H.
 
 Subtitles provided by [OpenSubtitles.com](https://www.opensubtitles.com).
 
@@ -219,7 +234,7 @@ pauses and the line becomes a field. Return saves, ⌥Return starts a second
 line, Esc cancels; saving an empty line takes it out. Paused after the line
 has gone, **Back to the last line** (in its place) brings it back, as E
 does; under a paused line, **Line before** and **Line after** step through
-the lines. The fix goes into the
+the lines, as ⌥← and ⌥→ do (playing or paused). The fix goes into the
 track and into a log of corrections. A name you correct is learned for the
 show:
 - the same misheard spelling is fixed in the episode's other lines at once
@@ -259,7 +274,7 @@ Space play/pause · ←/→ 10 s (Shift: 30 s) · ↑/↓ volume (to 200%) ·
 `[` / `]` speed −/+ 0.25× (`{` / `}` fine 0.05×, `=` normal) · M mute ·
 F full screen · S skip intro · N next episode · C subtitles · G / H subtitles
 0.1 s earlier / later (Shift: 1 s) · E fix a line of made subtitles ·
-0–9 jump to 0–90% ·
+⌥← / ⌥→ the made line before / after · 0–9 jump to 0–90% ·
 Esc back. In the library: `/` or ⌘F to search · ⌘[ / ⌘] back / forward ·
 ⌃⌘S sidebar · ⇧⌘O add a folder · ⌘, Settings.
 
@@ -286,7 +301,7 @@ mac/
     MadeSubs.swift      subtitles made on this Mac: speech recognition, names, cue rules
     ShowNames.swift     names to expect in the dialogue: TVmaze's characters, names learned from fixes
     LineFixes.swift     fixes to made lines: the track, the log, the names they teach
-    SubSync.swift       subtitle-to-dialogue sync (speech activity + correlation)
+    SubSync.swift       subtitle-to-dialogue sync (words heard, or speech activity + correlation)
     Subtext.swift       subtitle text: SRT -> WebVTT, advert removal, retiming
     Trickplay.swift     preview thumbnail sheets (seek bar, episode previews)
     Stills.swift        pictures for titles and episodes, chosen from their previews (Vision)

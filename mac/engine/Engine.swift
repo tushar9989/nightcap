@@ -546,24 +546,62 @@ final class Engine {
     return await subtitleTracks(f)
   }
 
-  /// Fits a track to the dialogue (see SubSync) and keeps the correction.
-  private func syncTrack(_ f: LibraryFile, _ subId: String, audio: Int) async throws -> SyncReport {
+  /// Fits a track to the dialogue (see SubSync) and keeps the correction: to the
+  /// words heard when `byWords` and they can be (canSyncByWords), else to the
+  /// loudness of speech. `progress` hears how the hearing goes.
+  private func syncTrack(
+    _ f: LibraryFile, _ subId: String, audio: Int, byWords: Bool, progress: @escaping @MainActor (MadeSubs.Step) -> Void = { _ in }
+  ) async throws -> SyncReport {
     guard let vtt = await plainVtt(f, subId) else {
       return SyncReport(result: SyncResult(confident: false, applied: false, reason: "Subtitle unavailable"), sync: nil)
     }
-    let r = try await subsync.align(f, subId, vtt, audio: audio)
-    let outcome = r.applied ? "applied" : r.inSync ? "in sync" : "not applied"
-    logLine(
-      "[subsync] \(f.name) \(subId): offset \(r.offset.map(jsNumber) ?? "-") s, scale \(r.scale.map { toFixed($0, 4) } ?? "-"), "
-        + "z \(r.z.map(jsNumber) ?? "-"), ratio \(r.ratio.map(jsNumber) ?? "-") -> \(outcome)")
+    let r: SyncResult
+    if byWords, await canSyncByWords(f, subId, audio: audio) {
+      let heard = try await maker.heard(f, audio: audio, progress: progress)
+      r = subsync.alignToWords(f, subId, vtt, heard: heard.words)
+      let parts = (r.parts ?? []).map { "\(jsNumber($0.offset)) s from \(jsNumber($0.from))" }
+      logLine(
+        "[subsync] \(f.name) \(subId) by words: \(r.anchors.map(String.init) ?? "too few") words matched, "
+          + "scale \(r.scale.map { toFixed($0, 4) } ?? "-"), "
+          + (parts.count > 1 ? "offsets \(parts.joined(separator: ", "))" : "offset \(r.offset.map(jsNumber) ?? "-") s") + " -> "
+          + (r.applied ? "applied" : r.inSync ? "in sync" : "not applied"))
+    } else {
+      r = try await subsync.align(f, subId, vtt, audio: audio)
+      logLine(
+        "[subsync] \(f.name) \(subId): offset \(r.offset.map(jsNumber) ?? "-") s, scale \(r.scale.map { toFixed($0, 4) } ?? "-"), "
+          + "z \(r.z.map(jsNumber) ?? "-"), ratio \(r.ratio.map(jsNumber) ?? "-") -> "
+          + (r.applied ? "applied" : r.inSync ? "in sync" : "not applied"))
+    }
     return SyncReport(result: r, sync: subsync.get(f, subId))
   }
 
-  func syncSubtitle(_ fileId: String, _ subId: String, audio: Int = 0) async throws -> SyncReport {
+  /// A track can be fitted to the words heard: it and the audio track are English (or
+  /// unlabelled), and Apple's English speech model is on this Mac.
+  private func canSyncByWords(_ f: LibraryFile, _ subId: String, audio: Int) async -> Bool {
+    let track = await subtitleTracks(f).first { $0.id == subId }
+    let tracks = await media.probe(f)?.audio ?? []
+    guard MadeSubs.mayBeEnglish(track?.lang), audio < max(1, tracks.count),
+      MadeSubs.mayBeEnglish(audio < tracks.count ? tracks[audio].lang : nil)
+    else { return false }
+    return await MadeSubs.canHearEnglish()
+  }
+
+  func canSyncByWords(_ fileId: String, _ subId: String, audio: Int = 0) async -> Bool {
+    guard let f = try? file(fileId) else { return false }
+    return await canSyncByWords(f, subId, audio: max(0, audio))
+  }
+
+  /// Fits a track to the dialogue: to the words heard when it can be (about 35 s
+  /// for an episode, nothing when it was heard already), else to the loudness of speech.
+  func syncSubtitle(
+    _ fileId: String, _ subId: String, audio: Int = 0, progress: @escaping @MainActor (MadeSubs.Step) -> Void = { _ in }
+  ) async throws -> SyncReport {
     let f = try file(fileId)
     guard Engine.subIdRe.test(subId) else { throw EngineError("bad subtitle id", 400) }
     do {
-      return try await syncTrack(f, subId, audio: max(0, audio))
+      return try await syncTrack(f, subId, audio: max(0, audio), byWords: true, progress: progress)
+    } catch let e as MadeSubs.Failure {
+      throw EngineError("Could not sync: \(e.message)", 500)
     } catch {
       throw EngineError("Could not sync: \(Engine.message(error))", 500)
     }
@@ -574,11 +612,12 @@ final class Engine {
     subsync.clear(try file(fileId), subId)
   }
 
-  /// Downloads not made for this exact file are synced to the audio right away.
+  /// Downloads not made for this exact file are synced to the loudness of speech
+  /// right away (about 3 s; the player then fits them to the words, see syncSubtitle).
   private func afterDownload(_ f: LibraryFile, _ track: SubtitleTrack?, audio: Int) async -> SubtitleTrack? {
     guard var track, track.hashMatch != true else { return track }
     do {
-      _ = try await syncTrack(f, track.id, audio: audio)
+      _ = try await syncTrack(f, track.id, audio: audio, byWords: false)
     } catch {
       logLine("[subsync] failed: \(Engine.message(error))")
     }

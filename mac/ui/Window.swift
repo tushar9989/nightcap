@@ -341,12 +341,19 @@ struct WindowRoot: View {
   var body: some View {
     @Bindable var win = win
     let search = Binding(get: { win.searchText }, set: { win.typeSearch($0) })
+    let uncovered = win.player == nil
     NavigationSplitView(columnVisibility: $win.columns) {
       Sidebar()
         .navigationSplitViewColumnWidth(min: 190, ideal: 280, max: 360)
+        .allowsHitTesting(uncovered)
     } detail: {
       PageHost()
+        .allowsHitTesting(uncovered)
     }
+    // Under the player the library takes no pointer. AppKit asks every view under the pointer
+    // for its tooltip, covered or not, so the pages' tooltips showed over the video. Each column
+    // is a view of its own and takes this from its content; the sidebar's rows take it from here.
+    .allowsHitTesting(uncovered)
     .font(.app(.body))
     .searchable(text: search, placement: .toolbar, prompt: "Titles and episodes")
     .searchFocused($searchFocused)

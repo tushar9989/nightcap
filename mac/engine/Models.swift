@@ -397,9 +397,19 @@ struct DownloadedIndex: Codable {
 
 // ---- Subtitle timing fixes (subsync.json) -------------------------------------------------
 
+/// From subtitle time `from` on, cues belong at t * scale + offset (until the next part).
+struct SyncPart: Codable, Equatable {
+  var from: Double
+  var offset: Double
+}
+
 struct SyncEntry: Codable, Equatable {
   var offset: Double
   var scale: Double
+  /// Subtitles of another cut: the parts, the first one's offset being `offset`.
+  var parts: [SyncPart]? = nil
+  /// "words" when fitted to the words heard; nil when to the loudness of speech.
+  var by: String? = nil
   var z: Double?
   /// Infinity (no other offset came close) is stored as null, as JSON has no Infinity.
   var ratio: Double?
@@ -416,10 +426,16 @@ struct SyncData: Codable {
   }
 }
 
-/// A timing correction: cue time t belongs at t * scale + offset.
+/// A timing correction: cue time t belongs at t * scale + offset, the offset being
+/// that of the last part starting at or before t when there are parts.
 struct SubTiming: Equatable {
   var offset: Double
   var scale: Double
+  var parts: [SyncPart] = []
+  /// Fitted to the words heard (not the loudness of speech).
+  var byWords = false
+
+  func offset(at t: Double) -> Double { parts.last { $0.from <= t }?.offset ?? offset }
 }
 
 // ---- Preview sheets (trickplay/<id>-<sig>/index.json) ----------------------------------------

@@ -141,7 +141,7 @@ private struct SubtitlesLayer: View {
         }
         .buttonStyle(.glass)
         .controlSize(.large)
-        .help("Shows the last line, paused, to fix it (E)")
+        .help("Shows the last line, paused, to fix it (⌥←)")
       }
     }
     .padding(.horizontal, size.width * 0.06)
@@ -173,10 +173,10 @@ private struct LineSteps: View {
 
   var body: some View {
     HStack(spacing: 18) {
-      Button("‹ Line before") { player.showLine(-1) }
+      Button("‹ Line before (⌥←)") { player.showLine(-1) }
         .underline()
       Text("Click the line to fix it (E)")
-      Button("Line after ›") { player.showLine(1) }
+      Button("Line after (⌥→) ›") { player.showLine(1) }
         .underline()
     }
     .buttonStyle(PlainTapStyle())
