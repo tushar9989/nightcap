@@ -61,6 +61,36 @@ private func byId(_ res: [(id: String, result: FP.Repeated)]) -> [String: FP.Rep
     try expect(abs(bStart - 77.912) < 1, "b start \(bStart)")
   }
 
+  t.test("an intro's narration joined to the song a moment differently is part of it") {
+    let narration = music(30, 4711)
+    // In b the narration was cut 128 samples (half a fingerprint step) shorter.
+    let a = episode(coldOpen: 12, intro: narration + theme, body: 90, seed: 3)
+    let b = episode(coldOpen: 40, intro: Array(narration.dropLast(128)) + theme, body: 90, seed: 4)
+    guard let seg = FP.findSharedSegment(FP.compute(a), FP.compute(b), AnalysisJob.intro) else { throw TestFailure(description: "expected a match") }
+    try expect(abs(FP.frameToSec(seg.a0) - 12) < 1, "a start \(FP.frameToSec(seg.a0))")
+    try expect(abs(FP.frameToSec(seg.a1) - 102) < 1, "a end \(FP.frameToSec(seg.a1))")
+    try expect(abs(FP.frameToSec(seg.b0) - 40) < 1, "b start \(FP.frameToSec(seg.b0))")
+  }
+
+  t.test("a narration before the song that the nearest episodes lack is still found") {
+    // Episodes 0–3 and 7 open with the narration, then the song; the others with the song.
+    let narration = music(30, 4711)
+    let lead: Set<Int> = [0, 1, 2, 3, 7]
+    let members = (0..<10).map { i in
+      FP.Member(
+        id: "e\(i)",
+        fp: FP.compute(
+          episode(coldOpen: 0.5, intro: lead.contains(i) ? Array(narration.dropLast(i % 2 * 128)) + theme : theme, body: 90, seed: 60 + UInt32(i))),
+        offset: 0)
+    }
+    let res = byId(FP.detectRepeatedSegments(members, members.map(\.id), AnalysisJob.intro, leadIns: AnalysisJob.leadInReach))
+    for i in 0..<10 {
+      guard let r = res["e\(i)"] else { throw TestFailure(description: "e\(i) missing") }
+      try expect(abs(r.start - 0.5) < 1, "e\(i) start \(r.start)")
+      try expect(abs(r.end - (lead.contains(i) ? 90.5 : 60.5)) < 1, "e\(i) end \(r.end)")
+    }
+  }
+
   t.test("unrelated audio does not match") {
     let a = FP.compute(music(180, 5))
     let b = FP.compute(music(180, 6))

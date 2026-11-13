@@ -149,6 +149,8 @@ enum FP {
     var gapFrames = Int(jsRound(FP.framesPerSec * 2.5))
     var minFrames = FP.secToFrames(15)
     var maxFrames = FP.secToFrames(150)
+    /// Take in shared audio joined on a moment differently (extendSegment).
+    var extend = false
   }
 
   struct Segment: Equatable {
@@ -218,10 +220,20 @@ enum FP {
   /// moving average of the bit distance. Short dips (up to `gapFrames`) are
   /// bridged so a line of dialogue over the theme song does not split it.
   static func bestRunAtOffset(_ A: [UInt32], _ B: [UInt32], _ d: Int, _ opts: MatchOptions) -> Segment? {
+    var best: Segment?
+    for r in runsAtOffset(A, B, d, opts, minFrames: opts.minFrames) where r.len <= opts.maxFrames {
+      if best == nil || r.len > best!.len { best = r }
+    }
+    return best
+  }
+
+  /// Every stretch, at least `minFrames` long, where A[i] and B[i + d] stay similar
+  /// (see bestRunAtOffset), in order.
+  static func runsAtOffset(_ A: [UInt32], _ B: [UInt32], _ d: Int, _ opts: MatchOptions, minFrames: Int) -> [Segment] {
     let i0 = max(0, -d)
     let i1 = min(A.count, B.count - d)
     let n = i1 - i0
-    if n <= 0 { return nil }
+    if n <= 0 { return [] }
     var dist = [Float](repeating: 0, count: n)
     var voiced = [UInt8](repeating: 0, count: n)
     for k in 0..<n {
@@ -258,14 +270,14 @@ enum FP {
     }
     if start >= 0 { runs.append((start, lastGood)) }
 
-    var best: Segment?
+    var out: [Segment] = []
     for (s0, e0) in runs {
       var s = s0, e = e0
       // Trim the blur the moving average adds at both ends.
       while s < e && Double(dist[s]) > opts.edgeBits { s += 1 }
       while e > s && Double(dist[e]) > opts.edgeBits { e -= 1 }
       let len = e - s + 1
-      if len < opts.minFrames || len > opts.maxFrames { continue }
+      if len < minFrames { continue }
       var sum = 0.0
       var v = 0
       for k in s...e {
@@ -275,16 +287,61 @@ enum FP {
       if Double(v) < Double(len) * 0.5 { continue }  // mostly shared silence, not shared audio
       let mean = sum / Double(len)
       if mean > opts.maxBits { continue }  // scattered near-misses chained together
-      if best == nil || len > best!.len {
-        best = Segment(a0: i0 + s, a1: i0 + e, b0: 0, b1: 0, len: len, mean: mean, offset: d)
+      out.append(Segment(a0: i0 + s, a1: i0 + e, b0: i0 + s + d, b1: i0 + e + d, len: len, mean: mean, offset: d))
+    }
+    return out
+  }
+
+  /// Shared audio right before or after `seg` that lines up a little differently
+  /// (up to about a second): an intro whose parts were joined a few milliseconds
+  /// apart in one of the two episodes ("Fullmetal Alchemist: Brotherhood": the
+  /// opening narration, then the song). The parts must be at least `minPart` long
+  /// and the whole no longer than opts.maxFrames.
+  static func extendSegment(_ A: [UInt32], _ B: [UInt32], _ seg: Segment, _ opts: MatchOptions) -> Segment {
+    let reach = secToFrames(1)
+    let minPart = secToFrames(5)
+    var out = seg
+    var grew = true
+    while grew {
+      grew = false
+      var before: Segment?
+      var after: Segment?
+      for d in (seg.offset - reach)...(seg.offset + reach) {
+        for r in runsAtOffset(A, B, d, opts, minFrames: minPart) {
+          // Ends where `out` starts (in both episodes), or starts where it ends.
+          if r.a1 < out.a0 + minPart && r.a1 >= out.a0 - opts.gapFrames && r.a0 < out.a0
+            && r.b1 >= out.b0 - opts.gapFrames && r.b1 < out.b0 + minPart && r.b0 < out.b0
+          {
+            if before == nil || r.a0 < before!.a0 { before = r }
+          }
+          if r.a0 > out.a1 - minPart && r.a0 <= out.a1 + opts.gapFrames && r.a1 > out.a1
+            && r.b0 <= out.b1 + opts.gapFrames && r.b0 > out.b1 - minPart && r.b1 > out.b1
+          {
+            if after == nil || r.a1 > after!.a1 { after = r }
+          }
+        }
+      }
+      for (r, isBefore) in [(before, true), (after, false)] {
+        guard let r else { continue }
+        var next = out
+        if isBefore {
+          next.a0 = r.a0
+          next.b0 = r.b0
+        } else {
+          next.a1 = r.a1
+          next.b1 = r.b1
+        }
+        let len = next.a1 - next.a0 + 1
+        if len > opts.maxFrames { continue }
+        // The parts' means, weighted by the frames each adds.
+        let added = len - out.len
+        next.mean = (out.mean * Double(out.len) + r.mean * Double(added)) / Double(len)
+        next.len = len
+        out = next
+        grew = true
       }
     }
-    if var b = best {
-      b.b0 = b.a0 + d
-      b.b1 = b.a1 + d
-      best = b
-    }
-    return best
+    return out
   }
 
   /// Finds the longest shared audio segment between two fingerprints: frame
@@ -295,7 +352,7 @@ enum FP {
     for d in candidateOffsets(A, B) {
       if let run = bestRunAtOffset(A, B, d, opts), best == nil || run.len > best!.len { best = run }
     }
-    return best
+    return opts.extend ? best.map { extendSegment(A, B, $0, opts) } : best
   }
 
   struct Member {
@@ -360,6 +417,24 @@ enum FP {
     return s.count % 2 == 1 ? s[m] : (s[m - 1] + s[m]) / 2
   }
 
+  /// The earliest start (or, with `latest`, the latest end) that at least
+  /// `atLeast` of `xs` (two or more) agree on within 2 s: the median of those.
+  /// Episodes that share an intro's lead-in (a narration before the song) and
+  /// ones without it then give the lead-in, not a point halfway through it.
+  /// Values close together give their median, as before. With one value, that value.
+  private static func agreedEdge(_ xs: [Double], latest: Bool, atLeast: Int = 2) -> Double {
+    if xs.count < 2 { return xs.first ?? 0 }
+    let s = xs.stableSorted(by: numCompare)
+    let ordered = latest ? Array(s.reversed()) : s
+    let tol = 2.0
+    let need = max(2, atLeast)
+    for x in ordered {
+      let near = ordered.filter { latest ? $0 <= x && $0 >= x - tol : $0 >= x && $0 <= x + tol }
+      if near.count >= need { return median(near) }
+    }
+    return median(xs)
+  }
+
   /// Given fingerprints for every episode of a group (usually one season),
   /// finds each episode's segment by comparing it with its nearest siblings and
   /// keeping the answer at least two of them agree on. Seasons can alternate
@@ -367,9 +442,12 @@ enum FP {
   /// widens to more episodes (comparisons are cheap once fingerprints exist).
   ///   targets: ids to produce results for (others only serve as references)
   ///   pairs: also accept two episodes that share a segment with nobody else
+  ///   leadIns: take in what at least two siblings share just before or after the
+  ///     agreed segment (an intro's narration before the song), looking at up to
+  ///     this many of the nearest episodes
   static func detectRepeatedSegments(
     _ members: [Member], _ targets: [String], _ opts: MatchOptions = MatchOptions(),
-    minSiblings: Int = 4, maxSiblings: Int = 10, pairs: PairRule? = nil
+    minSiblings: Int = 4, maxSiblings: Int = 10, pairs: PairRule? = nil, leadIns: Int? = nil
   ) -> [(id: String, result: Repeated)] {
     var byId: [String: Int] = [:]
     for (i, m) in members.enumerated() { byId[m.id] = i }
@@ -428,9 +506,36 @@ enum FP {
         unmatched.append((id, index))
         continue
       }
-      results.append((id, Repeated(
-        start: median(cluster.map(\.start)), end: median(cluster.map(\.end)),
-        support: cluster.count, compared: s.compared)))
+      guard let reach = leadIns else {
+        results.append((id, Repeated(
+          start: median(cluster.map(\.start)), end: median(cluster.map(\.end)),
+          support: cluster.count, compared: s.compared)))
+        continue
+      }
+      var start = agreedEdge(cluster.map(\.start), latest: false)
+      var end = agreedEdge(cluster.map(\.end), latest: true)
+      // A lead-in its nearest siblings lack (they start with the song) can still be
+      // shared with episodes further away: a quarter of those that share the
+      // segment (two at least) must agree on it, so a stray match or two (the
+      // end of one teaser like another's) does not move it.
+      var more = cluster
+      var looked = Set(s.found.map(\.other))
+      for step in 1..<max(2, members.count) where looked.count < reach {
+        for idx in [index + step, index - step] where idx >= 0 && idx < members.count && !members[idx].fp.isEmpty && !looked.contains(idx) {
+          looked.insert(idx)
+          if let f = pair(index, idx), min(f.end, end) - max(f.start, start) >= 0.5 * (end - start) { more.append(f) }
+        }
+      }
+      for f in s.found where !cluster.contains(where: { $0.other == f.other }) && min(f.end, end) - max(f.start, start) >= 0.5 * (end - start) {
+        more.append(f)
+      }
+      let quarter = Int((Double(more.count) / 4).rounded(.up))
+      let wider = (
+        agreedEdge(more.map(\.start), latest: false, atLeast: quarter), agreedEdge(more.map(\.end), latest: true, atLeast: quarter)
+      )
+      if wider.0 < start && end - wider.0 <= frameToSec(opts.maxFrames) { start = wider.0 }
+      if wider.1 > end && wider.1 - start <= frameToSec(opts.maxFrames) { end = wider.1 }
+      results.append((id, Repeated(start: start, end: end, support: cluster.count, compared: s.compared)))
     }
     guard let rule = pairs else { return results }
     // The only match of an episode that found no agreement, if it has exactly one.

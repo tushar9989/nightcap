@@ -16,7 +16,7 @@ import Foundation
 
 @MainActor
 final class Analyzer {
-  static let version = 3  // bump to re-run matching (fingerprints are reused)
+  static let version = 4  // bump to re-run matching (fingerprints are reused)
   let fpDir = ensureDir(Paths.cache("fingerprints"))
   let store = JsonStore(Paths.data("analysis.json"), defaults: AnalysisData(version: Analyzer.version))
   private let getLibrary: () -> Library
@@ -332,6 +332,9 @@ struct AnalysisJob: Sendable {
 
   static let widerCount = 8
   static let introPairs = FP.PairRule()
+  /// How many of the nearest episodes may be asked about what leads into an intro
+  /// or the credits (a narration before the song; credits over the last scene).
+  static let leadInReach = 24
   // Credits start wherever the episode ends, so where they start is no test.
   static let creditPairs = FP.PairRule(maxShift: nil)
 
@@ -339,12 +342,14 @@ struct AnalysisJob: Sendable {
     var o = FP.MatchOptions()
     o.minFrames = FP.secToFrames(15)
     o.maxFrames = FP.secToFrames(150)
+    o.extend = true
     return o
   }()
   static let credits: FP.MatchOptions = {
     var o = FP.MatchOptions()
     o.minFrames = FP.secToFrames(15)
     o.maxFrames = FP.secToFrames(600)
+    o.extend = true
     return o
   }()
 
@@ -579,9 +584,9 @@ struct AnalysisJob: Sendable {
     }
     let targets = files.map(\.id)
     var intros: [String: FP.Repeated] = [:]
-    for (id, r) in FP.detectRepeatedSegments(heads, targets, AnalysisJob.intro, pairs: AnalysisJob.introPairs) { intros[id] = r }
+    for (id, r) in FP.detectRepeatedSegments(heads, targets, AnalysisJob.intro, pairs: AnalysisJob.introPairs, leadIns: AnalysisJob.leadInReach) { intros[id] = r }
     var credits: [String: FP.Repeated] = [:]
-    for (id, r) in FP.detectRepeatedSegments(tails, targets, AnalysisJob.credits, pairs: AnalysisJob.creditPairs) { credits[id] = r }
+    for (id, r) in FP.detectRepeatedSegments(tails, targets, AnalysisJob.credits, pairs: AnalysisJob.creditPairs, leadIns: AnalysisJob.leadInReach) { credits[id] = r }
 
     // A long cold open can push the intro past the minutes fingerprinted for
     // every episode. Look further into the episodes that found none, or found
@@ -596,7 +601,7 @@ struct AnalysisJob: Sendable {
     if !longHeads.isEmpty {
       let further = heads.map { longHeads[$0.id] ?? $0 }
       let late = targets.filter { longHeads[$0] != nil }
-      for (id, r) in FP.detectRepeatedSegments(further, late, AnalysisJob.intro, pairs: AnalysisJob.introPairs) {
+      for (id, r) in FP.detectRepeatedSegments(further, late, AnalysisJob.intro, pairs: AnalysisJob.introPairs, leadIns: AnalysisJob.leadInReach) {
         // A cut-off intro is only replaced by the whole of it.
         if let old = intros[id], min(old.end, r.end) <= max(old.start, r.start) { continue }
         intros[id] = r
