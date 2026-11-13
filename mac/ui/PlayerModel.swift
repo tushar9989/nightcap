@@ -83,6 +83,9 @@ final class PlayerModel {
   private(set) var pictureStatus: Upscaler.Status = .off
   /// The audio track: the n-th audio stream (the order of probe.audio).
   private(set) var audio = 0
+  /// The show playing (Title.id), which keeps its own audio and subtitles
+  /// (Prefs.showTracks); nil for a film or a video opened on its own.
+  @ObservationIgnored private var show: String?
   private(set) var subId: String?
   private(set) var subDelay = 0.0
   /// The track being synced to the dialogue, and how far hearing its words has got.
@@ -214,6 +217,7 @@ final class PlayerModel {
       }
       guard seq == openSeq else { return }  // switched again meanwhile
       self.info = info
+      show = app.titles[info.titleId]?.isShow == true ? info.titleId : nil
       markers = info.markers
       nextId = app.nextAfter(fid)
       audio = pickAudio(info.probe)
@@ -262,6 +266,7 @@ final class PlayerModel {
   }
 
   private func resetEpisodeState() {
+    show = nil
     started = false
     landed = false
     mediaInfo = nil
@@ -292,12 +297,27 @@ final class PlayerModel {
     closePanel()
   }
 
+  /// The show's audio track, or for a film the language last chosen anywhere.
   private func pickAudio(_ probe: ProbeInfo?) -> Int {
-    let tracks = probe?.audio ?? []
-    if tracks.count <= 1 { return 0 }
-    let pref = Prefs.audioLang
-    if !pref.isEmpty, let i = tracks.firstIndex(where: { $0.lang == pref }) { return i }
-    return max(0, tracks.firstIndex(where: \.default) ?? -1)
+    let choice: AudioChoice?
+    if let show {
+      choice = Prefs.showTracks(show).audio
+    } else {
+      choice = Prefs.audioLang.isEmpty ? nil : AudioChoice(lang: Prefs.audioLang)
+    }
+    return AudioChoice.pick(probe?.audio ?? [], choice)
+  }
+
+  /// The subtitles chosen (their label, nil for none): the show's, or for a film those last chosen anywhere.
+  private var subChoice: String? {
+    if let show { return Prefs.showTracks(show).sub }
+    return Prefs.subLabel
+  }
+
+  /// The subtitles last shown, for C: in the show, or for a film anywhere.
+  private var lastSubChoice: String {
+    if let show { return Prefs.showTracks(show).lastSub }
+    return Prefs.lastSubLabel
   }
 
   // ---- Media ------------------------------------------------------------------------------
@@ -571,6 +591,12 @@ final class PlayerModel {
     let sub = info?.subtitles.first { $0.id == id }
     if remember { Prefs.subLabel = sub?.label }
     if let sub { Prefs.lastSubLabel = sub.label }
+    if let show, remember || sub != nil {
+      var t = Prefs.showTracks(show)
+      if remember { t.sub = sub?.label }
+      if let sub { t.lastSub = sub.label }
+      Prefs.setShowTracks(t)
+    }
     guard let sub, let fid else { return nil }
     return Task {
       do {
@@ -586,7 +612,7 @@ final class PlayerModel {
   }
 
   private func autoSubtitles() {
-    guard let label = Prefs.subLabel, let info else { return }
+    guard let label = subChoice, let info else { return }
     let lang = (label.jsSplit(" ").first ?? "").jsLowercased
     let hit = info.subtitles.first { $0.label == label } ?? info.subtitles.first { $0.label.jsLowercased.jsStartsWith(lang) }
     if let hit {
@@ -604,7 +630,7 @@ final class PlayerModel {
     if language.isEmpty { return }
     do {
       let r = try await app.engine.autoSubtitle(fid, language: language, audio: audio)
-      guard self.fid == fid, let track = r.track, subId == nil, Prefs.subLabel != nil else { return }
+      guard self.fid == fid, let track = r.track, subId == nil, subChoice != nil else { return }
       addTrack(track)
       selectSubtitle(track.id, remember: false)
       osd("Subtitles: \(track.label)")
@@ -628,7 +654,7 @@ final class PlayerModel {
     if subId != nil {
       selectSubtitle(nil)
     } else if !subs.isEmpty {
-      selectSubtitle((subs.first { $0.label == Prefs.lastSubLabel } ?? subs[0]).id)
+      selectSubtitle((subs.first { $0.label == lastSubChoice } ?? subs[0]).id)
     }
     osd(subId != nil ? "Subtitles on" : "Subtitles off")
   }
@@ -978,6 +1004,11 @@ final class PlayerModel {
     guard i != audio, let tracks = info?.probe?.audio, i < tracks.count else { return }
     audio = i
     Prefs.audioLang = tracks[i].lang
+    if let show {
+      var t = Prefs.showTracks(show)
+      t.audio = AudioChoice(tracks, i)
+      Prefs.setShowTracks(t)
+    }
     mp.selectAudio(i)
     spinnerTask?.cancel()
     spinnerTask = Task {

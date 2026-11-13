@@ -62,7 +62,12 @@ shows and movies; each title has its own page with seasons and episodes.
   `Subs` folder beside it, embedded, or online), seek-bar previews, and Next
   through the files opened together. To make it the default for a kind of
   file: Finder → **Get Info** on one → **Open with: Nightcap** → **Change All…**
-- Audio-track switching, media keys / Now Playing, full screen.
+- **Audio tracks and subtitles kept per show** – the track chosen in the
+  player's Subtitles button menu (a dub, a commentary, an unlabelled second
+  track) and the subtitles chosen, or none, carry on to the show's other
+  episodes; another show or a film keeps its own. A show played for the first
+  time starts with the choices last made anywhere, and films follow those.
+- Media keys / Now Playing, full screen.
 
 ## Requirements
 
@@ -303,6 +308,7 @@ mac/
     LineFixes.swift     fixes to made lines: the track, the log, the names they teach
     SubSync.swift       subtitle-to-dialogue sync (words heard, or speech activity + correlation)
     Subtext.swift       subtitle text: SRT -> WebVTT, advert removal, retiming
+    TrackChoice.swift   each show's audio track and subtitles, found again in its other episodes
     Trickplay.swift     preview thumbnail sheets (seek bar, episode previews)
     Stills.swift        pictures for titles and episodes, chosen from their previews (Vision)
     Models.swift, Util.swift, JS.swift, JSDate.swift, Language.swift, FFTTables.swift, fdlibm.c

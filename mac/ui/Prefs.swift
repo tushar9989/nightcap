@@ -2,7 +2,8 @@ import Foundation
 
 // The player's choices, remembered for every window (the pages kept them in
 // localStorage): volume, mute, speed, audio language, the subtitles last
-// chosen, each video's subtitle timing nudges, and the picture.
+// chosen, each show's audio and subtitles, each video's subtitle timing
+// nudges, and the picture.
 @MainActor
 enum Prefs {
   private static let d = UserDefaults.standard
@@ -81,5 +82,28 @@ enum Prefs {
     if seconds != 0 { list.append(Delay(key: key, seconds: seconds)) }
     if list.count > 300 { list.removeFirst(list.count - 300) }
     delays = list
+  }
+
+  // ---- Each show's audio and subtitles (TrackChoice), the latest 500 shows ------------------
+
+  private static var showTrackList: [ShowTracks] {
+    get {
+      guard let data = d.data(forKey: "showTracks"), let list = try? JSONDecoder().decode([ShowTracks].self, from: data) else { return [] }
+      return list
+    }
+    set { d.set(try? JSONEncoder().encode(newValue), forKey: "showTracks") }
+  }
+
+  /// What show `show` plays with; the first time, the choices last made anywhere, kept for it from now on.
+  static func showTracks(_ show: String) -> ShowTracks {
+    if let t = showTrackList.last(where: { $0.show == show }) { return t }
+    let t = ShowTracks(
+      show: show, audio: audioLang.isEmpty ? nil : AudioChoice(lang: audioLang), sub: subLabel, lastSub: lastSubLabel)
+    setShowTracks(t)
+    return t
+  }
+
+  static func setShowTracks(_ t: ShowTracks) {
+    showTrackList = ShowTracks.keep(t, in: showTrackList)
   }
 }
