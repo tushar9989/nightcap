@@ -258,7 +258,8 @@ enum StillMath {
 
 @MainActor
 final class Stills {
-  let dir = ensureDir(Paths.data("stills"))
+  /// In the cache: each video's still (<id>-<sig>.json/.jpg) and the pictures cut from it, kept while used (Cache).
+  let dir = ensureDir(Paths.cache("stills"))
   private let trickplay: () -> Trickplay?
   private let markers: (String) -> Markers?
   private let limit = Limiter(2)
@@ -271,6 +272,9 @@ final class Stills {
   /// Videos with no still to be had (no usable frame, the file not there):
   /// not tried again until the app is next started.
   private var failed: Set<String> = []
+  /// Videos whose still was asked for before their previews were made (their
+  /// previews were asked for too): the sweep chooses their stills when the previews come.
+  private(set) var asked: [String] = []
   private var sweeping = false
   private var sweepAgain = false
   private var stopped = false
@@ -282,12 +286,21 @@ final class Stills {
 
   private func base(_ f: LibraryFile) -> String { join(dir, "\(f.id)-\(sigHash(f))") }
 
-  private func saved(_ base: String) -> StillInfo? {
-    if let info = known[base] { return info }
+  /// A still chosen before; `use` marks it used (not when the sweep only looks).
+  private func saved(_ base: String, use: Bool = true) -> StillInfo? {
+    if let info = known[base] {
+      // Gone if it expired or macOS emptied the cache.
+      if fileExists("\(base).jpg") {
+        if use { Cache.touch("\(base).json") }
+        return info
+      }
+      known[base] = nil
+    }
     guard let raw = FileManager.default.contents(atPath: "\(base).json"), let info = try? JSONDecoder().decode(StillInfo.self, from: raw),
       info.v == StillInfo.version, fileExists("\(base).jpg")
     else { return nil }
     known[base] = info
+    if use { Cache.touch("\(base).json") }
     return info
   }
 
@@ -303,7 +316,14 @@ final class Stills {
     let base = base(f)
     if let info = saved(base) { return info }
     if let running = picks[f.id] { return await running.value }
-    guard !failed.contains(base), let ffmpeg = Tools.ffmpeg, let (m, sheets) = previews(f) else { return nil }
+    guard !failed.contains(base), let ffmpeg = Tools.ffmpeg else { return nil }
+    guard let (m, sheets) = previews(f) else {
+      // Made when its previews are (if the video is complete and previews are on).
+      if !asked.contains(f.id) { asked.append(f.id) }
+      trickplay()?.prioritize([f.id])
+      return nil
+    }
+    asked.removeAll { $0 == f.id }
     let mk = markers(f.id)
     let task = Task { () -> StillInfo? in
       let info = await limit.run { await choose(f, base: base, manifest: m, sheets: sheets, markers: mk, ffmpeg: ffmpeg) }
@@ -337,12 +357,17 @@ final class Stills {
         for f in files() {
           if stopped { break }
           let base = base(f)
-          if failed.contains(base) || saved(base) != nil || previews(f) == nil { continue }
+          if failed.contains(base) || saved(base, use: false) != nil || previews(f) == nil { continue }
           _ = await still(f)
         }
       } while sweepAgain && !stopped
       sweeping = false
     }
+  }
+
+  /// Removes the stills and pictures not used for `Cache.keepMs`.
+  func expire() {
+    for item in Cache.sweep(dir) { known[join(dir, item)] = nil }
   }
 
   /// The app is quitting: no more stills are started.
@@ -416,7 +441,10 @@ final class Stills {
   func moment(_ f: LibraryFile, at t: Double, width: Int) async -> String? {
     let tenths = Int(jsRound(t * 10))
     let out = join(dir, "\(f.id)-\(sigHash(f))-m\(tenths)-\(width).jpg")
-    if fileExists(out) { return out }
+    if fileExists(out) {
+      Cache.touch(out)
+      return out
+    }
     if let running = renders[out] { return await running.value }
     guard let ffmpeg = Tools.ffmpeg else { return nil }
     // The video's bars, as its still found them (one frame alone can be too dark to tell).
@@ -457,7 +485,10 @@ final class Stills {
 
   /// Makes `out` once (off the main thread), however many ask for it at the same time.
   private func once(_ out: String, _ make: @escaping @Sendable () -> String?) async -> String? {
-    if fileExists(out) { return out }
+    if fileExists(out) {
+      Cache.touch(out)
+      return out
+    }
     if let running = renders[out] { return await running.value }
     let task = Task { () -> String? in
       let made = await Task.detached(priority: .userInitiated, operation: make).value

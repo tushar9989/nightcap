@@ -12,7 +12,7 @@ import Foundation
 // It has no films.
 //
 // On disk (DATA_DIR):
-//   names.json   TVmaze's answers (kept 30 days) and the names learned from fixes
+//   names.json   TVmaze's answers (kept 30 days, then dropped) and the names learned from fixes
 
 struct NamesData: Codable {
   struct Show: Codable, Equatable {
@@ -61,6 +61,18 @@ final class ShowNames {
   ) {
     self.store = store
     self.base = base
+    prune()
+  }
+
+  /// Drops TVmaze's answers older than they are kept (they would be asked
+  /// for again anyway); the names learned from fixes stay.
+  func prune(now: Int64 = nowMs()) {
+    let shows = store.data.shows.filter { now - $0.value.at < ShowNames.keepMs }
+    let people = store.data.people.filter { now - $0.value.at < ShowNames.keepMs }
+    guard shows.count != store.data.shows.count || people.count != store.data.people.count else { return }
+    store.data.shows = shows
+    store.data.people = people
+    store.save()
   }
 
   func flush() { store.flush() }

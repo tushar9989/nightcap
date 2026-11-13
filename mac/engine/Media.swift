@@ -21,11 +21,25 @@ struct SubtitleTrack: Equatable, Identifiable {
 @MainActor
 final class Media {
   static let probeVersion = 2
-  let probeStore = JsonStore(Paths.data("probe.json"), defaults: ProbeData())
+  /// In the cache; entries are kept while their file is in the library (or open).
+  let probeStore = JsonStore(Paths.cache("probe.json"), defaults: ProbeData())
   private var inflight: [String: Task<ProbeInfo?, Never>] = [:]
   private let probeLimit = Limiter(3)
 
   func flush() { probeStore.flush() }
+
+  /// Keeps the details of these files only.
+  func prune(keeping ids: Set<String>) {
+    let before = probeStore.data.files.count
+    probeStore.data.files = probeStore.data.files.filter { ids.contains($0.key) }
+    if probeStore.data.files.count != before { probeStore.save() }
+  }
+
+  /// Removes the frames and subtitles not used for `Cache.keepMs`.
+  func expire() {
+    Cache.sweep(thumbDir)
+    Cache.sweep(subDir)
+  }
 
   func cachedProbe(_ f: LibraryFile) -> ProbeInfo? {
     guard let c = probeStore.data.files[f.id], c.sig == fileSig(f), c.v == Media.probeVersion else { return nil }
@@ -102,14 +116,18 @@ final class Media {
 
   // ---- Thumbnails ------------------------------------------------------------------
 
-  private let thumbDir = ensureDir(Paths.data("thumbs"))
+  /// In the cache, kept while used (Cache).
+  private let thumbDir = ensureDir(Paths.cache("thumbs"))
   private let thumbLimit = Limiter(2)
   private var thumbInflight: [String: Task<String?, Never>] = [:]
 
   /// A frame from `at` (0...1) of the way through the video, `width` wide (a JPEG path).
   func frameThumb(_ f: LibraryFile, at: Double = 0.3, width: Int = 480) async -> String? {
     let out = join(thumbDir, "\(f.id)-\(sigHash(f))-\(width)-\(Int(jsRound(at * 100))).jpg")
-    if fileExists(out) { return out }
+    if fileExists(out) {
+      Cache.touch(out)
+      return out
+    }
     guard let ffmpeg = Tools.ffmpeg else { return nil }
     if let running = thumbInflight[out] { return await running.value }
     let task = Task { () -> String? in
@@ -118,6 +136,7 @@ final class Media {
         if let info, info.video == nil { return nil }
         let t = (info?.duration ?? 0) > 0 ? info!.duration * at : 60
         let tmp = "\(out).tmp.jpg"
+        ensureDir(thumbDir)
         let r = try? await runTool(ffmpeg, [
           "-nostdin", "-hide_banner", "-loglevel", "error", "-ss", toFixed(t, 2), "-i", f.path, "-map", "0:v:0",
           "-vf", "thumbnail=8,scale=\(width):-2", "-frames:v", "1", "-q:v", "3", "-y", tmp,
@@ -137,7 +156,8 @@ final class Media {
 
   // ---- Subtitles -------------------------------------------------------------------
 
-  private let subDir = ensureDir(Paths.data("subs"))
+  /// Subtitles inside videos (and other formats) as WebVTT, in the cache, kept while used (Cache).
+  private let subDir = ensureDir(Paths.cache("subs"))
   private static let textSubCodecs: Set<String> = ["subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"]
   static let langNames = ["eng": "English", "en": "English", "spa": "Spanish", "fre": "French", "fra": "French", "ger": "German", "deu": "German", "ita": "Italian", "por": "Portuguese", "jpn": "Japanese", "kor": "Korean", "chi": "Chinese", "zho": "Chinese", "hin": "Hindi", "rus": "Russian", "ara": "Arabic", "dut": "Dutch", "nld": "Dutch", "swe": "Swedish", "nor": "Norwegian", "dan": "Danish", "fin": "Finnish", "pol": "Polish", "tur": "Turkish"]
 
@@ -170,11 +190,15 @@ final class Media {
     }
     guard let ffmpeg = Tools.ffmpeg else { return nil }
     let cache = join(subDir, "\(f.id)-\(sigHash(f))-\(subId).vtt")
-    if let data = FileManager.default.contents(atPath: cache) { return String(decoding: data, as: UTF8.self) }
+    if let data = FileManager.default.contents(atPath: cache) {
+      Cache.touch(cache)
+      return String(decoding: data, as: UTF8.self)
+    }
     let args = kind == "x"
       ? ["-nostdin", "-loglevel", "error", "-i", f.subs[index].path, "-f", "webvtt", "pipe:1"]
       : ["-nostdin", "-loglevel", "error", "-i", f.path, "-map", "0:s:\(index)", "-f", "webvtt", "pipe:1"]
     guard let r = try? await runTool(ffmpeg, args, timeout: 180), r.code == 0 else { return nil }
+    ensureDir(subDir)
     FileManager.default.createFile(atPath: cache, contents: r.stdout)
     return String(decoding: r.stdout, as: UTF8.self)
   }
@@ -185,7 +209,7 @@ final class Media {
     if fmt == "vtt" { return Subtext.dropBOM(text) }
     if fmt == "srt" || (fmt == nil && ext == ".srt") { return Subtext.srtToVtt(text) }
     guard let fmt, let ffmpeg = Tools.ffmpeg else { return nil }
-    let tmp = join(subDir, "convert-\(getpid())-\(nowMs()).txt")
+    let tmp = join(ensureDir(subDir), "convert-\(getpid())-\(nowMs()).txt")
     FileManager.default.createFile(atPath: tmp, contents: Data(text.utf8))
     defer { removeItem(tmp) }
     guard let r = try? await runTool(ffmpeg, ["-nostdin", "-loglevel", "error", "-f", fmt, "-i", tmp, "-f", "webvtt", "pipe:1"], timeout: 60),

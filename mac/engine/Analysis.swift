@@ -3,21 +3,27 @@ import Foundation
 // Keeps the intro/credits index: decides what needs analysing, works through
 // one season (or movie) at a time in the background, and stores the results.
 //
-// On disk (DATA_DIR):
-//   analysis.json      markers per file, plus manual corrections
-//   fingerprints/*.fp  audio fingerprints of each episode's first and last
-//                      minutes (and a longer start where a long cold open
-//                      hides the intro), so adding an episode only fingerprints
-//                      that episode and re-runs the (fast) matching for its season
+// On disk:
+//   analysis.json      (data) markers per file, plus manual corrections
+//   fingerprints/*.fp  (cache, kept while used) audio fingerprints of each
+//                      episode's first and last minutes (and a longer start where
+//                      a long cold open hides the intro), so adding an episode
+//                      only fingerprints that episode and re-runs the (fast)
+//                      matching for its season
+// Only videos that have finished arriving are analysed (Completeness): a season
+// is analysed with the episodes complete so far, and again as more arrive.
 
 @MainActor
 final class Analyzer {
   static let version = 3  // bump to re-run matching (fingerprints are reused)
-  let fpDir = ensureDir(Paths.data("fingerprints"))
+  let fpDir = ensureDir(Paths.cache("fingerprints"))
   let store = JsonStore(Paths.data("analysis.json"), defaults: AnalysisData(version: Analyzer.version))
   private let getLibrary: () -> Library
   private let media: Media
   private let isEnabled: () -> Bool
+  /// Whether a video has finished arriving.
+  private let arrival: (LibraryFile) -> Completeness.State
+  private func isComplete(_ f: LibraryFile) -> Bool { arrival(f) == .complete }
   /// Called when results or progress change.
   var onChange: (() -> Void)?
 
@@ -38,32 +44,42 @@ final class Analyzer {
   private(set) var queue: [Group] = []
   private(set) var current: (group: Group, done: Int, total: Int)?
 
-  init(getLibrary: @escaping () -> Library, media: Media, isEnabled: @escaping () -> Bool) {
+  init(
+    getLibrary: @escaping () -> Library, media: Media, isEnabled: @escaping () -> Bool,
+    arrival: @escaping (LibraryFile) -> Completeness.State = { _ in .complete }
+  ) {
     self.getLibrary = getLibrary
     self.media = media
     self.isEnabled = isEnabled
+    self.arrival = arrival
   }
+
+  /// Removes the fingerprints not used for `Cache.keepMs`.
+  func expire() { Cache.sweep(fpDir) }
 
   func flush() { store.flush() }
 
   /// Each season of a show (and each movie) is analysed as one group, because
   /// episodes are compared with their neighbours in the same season.
+  /// Only videos that have finished arriving count (a season with none has no work).
   func groups(_ title: Title) -> [Group] {
     let lib = getLibrary()
+    let complete = { (id: String) -> Bool in lib.files[id].map { self.isComplete($0) } ?? false }
     if title.kind == "movie" {
-      return [Group(key: title.id, titleId: title.id, kind: "movie", label: title.name, fileIds: title.seasons.flatMap(\.episodes), refs: [])]
+      return [Group(key: title.id, titleId: title.id, kind: "movie", label: title.name, fileIds: title.seasons.flatMap(\.episodes).filter(complete), refs: [])]
     }
     let regular = title.seasons.filter { !$0.isExtras }
     return regular.enumerated().map { i, s in
+      let episodes = s.episodes.filter(complete)
       var refs: [String] = []
-      if s.episodes.count < 3 {
+      if episodes.count < 3 {
         // Too few episodes to compare within the season: borrow neighbours.
         let others = (i + 1 < regular.count ? regular[i + 1].episodes : []) + (i > 0 ? regular[i - 1].episodes : [])
-        refs = Array(others.prefix(max(0, 4 - s.episodes.count))).filter { lib.files[$0] != nil }
+        refs = Array(others.filter(complete).prefix(max(0, 4 - episodes.count)))
       }
       // The next season's first episodes and the previous season's last, in turn.
-      let after = regular[(i + 1)...].flatMap(\.episodes).filter { lib.files[$0] != nil }
-      let before = regular[..<i].reversed().flatMap { $0.episodes.reversed() }.filter { lib.files[$0] != nil }
+      let after = regular[(i + 1)...].flatMap(\.episodes).filter(complete)
+      let before = regular[..<i].reversed().flatMap { $0.episodes.reversed() }.filter(complete)
       var wider: [String] = []
       for k in 0..<min(max(after.count, before.count), AnalysisJob.widerCount) {
         if k < after.count { wider.append(after[k]) }
@@ -71,7 +87,7 @@ final class Analyzer {
       }
       return Group(
         key: "\(title.id):\(s.id)", titleId: title.id, seasonId: s.id, kind: "show", label: "\(title.name) · \(s.name)",
-        fileIds: s.episodes, refs: refs, wider: Array(wider.prefix(AnalysisJob.widerCount)))
+        fileIds: episodes, refs: refs, wider: Array(wider.prefix(AnalysisJob.widerCount)))
     }
   }
 
@@ -91,10 +107,14 @@ final class Analyzer {
   }
 
   /// Queue everything that is new or changed. Recently added titles go first.
+  /// A title some of whose videos are still being looked at (Completeness)
+  /// waits for them: its seasons would otherwise be analysed short of them.
   func sync() {
     let lib = getLibrary()
     var wanted: [Group] = []
     for t in lib.titles.stableSorted(by: { numCompare($1.addedAt, $0.addedAt) }) {
+      let checking = t.seasons.contains { s in s.episodes.contains { lib.files[$0].map { arrival($0) == .checking } ?? false } }
+      if checking { continue }
       for g in groups(t) where needsWork(g) { wanted.append(g) }
     }
     var queued: [String: Group] = [:]
@@ -128,8 +148,12 @@ final class Analyzer {
     prioritize(titleId)
   }
 
+  /// A video's intro and credits: found (not while the video is still
+  /// arriving: they may have been found in part of it), or set by hand.
   func markers(_ fileId: String) -> Markers {
-    let auto = store.data.files[fileId]
+    // (While being looked at, what was found before stays.)
+    let arriving = getLibrary().files[fileId].map { arrival($0) == .arriving } ?? false
+    let auto = arriving ? nil : store.data.files[fileId]
     let manual = store.data.manual[fileId] ?? ManualEntry()
     var intro = auto?.intro, credits = auto?.credits
     switch manual.intro {
@@ -350,10 +374,12 @@ struct AnalysisJob: Sendable {
     guard let win = window else { return ([], 0) }
     let cache = join(fpDir, "\(f.id)-\(f.sig)-\(part).fp")
     if let data = FileManager.default.contents(atPath: cache), let hit = FP.decode(data), abs(hit.offset - win.start) < 0.01 {
+      Cache.touch(cache)
       return (hit.fp, hit.offset)
     }
     let pcm = try await decodeAudio(f, win.start, win.len)
     let fp = FP.compute(pcm)
+    ensureDir(fpDir)
     FileManager.default.createFile(atPath: cache, contents: FP.encode(fp, offset: win.start, length: win.len))
     return (fp, win.start)
   }

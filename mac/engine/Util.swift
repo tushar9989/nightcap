@@ -19,6 +19,30 @@ enum Paths {
     parts.reduce(data) { ($0 as NSString).appendingPathComponent($1) }
   }
 
+  /// What the app makes and can make again (previews, pictures, fingerprints,
+  /// file details): ~/Library/Caches/Nightcap, the place macOS keeps for files
+  /// that can be rebuilt; each item goes when unused for `Cache.keepMs` (Cache).
+  /// CACHE_DIR overrides it; with DATA_DIR alone (tests), DATA_DIR/Caches.
+  /// The first time, what earlier versions kept in `data` moves here.
+  static let cache: String = {
+    let env = ProcessInfo.processInfo.environment
+    let dir: String
+    if let d = env["CACHE_DIR"], !d.isEmpty {
+      dir = URL(fileURLWithPath: (d as NSString).expandingTildeInPath).standardizedFileURL.path
+    } else if let d = env["DATA_DIR"], !d.isEmpty {
+      dir = (data as NSString).appendingPathComponent("Caches")
+    } else {
+      dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Nightcap").path
+    }
+    ensureDir(dir)
+    Cache.moveOld(Cache.items, from: data, to: dir)
+    return dir
+  }()
+
+  static func cache(_ parts: String...) -> String {
+    parts.reduce(cache) { ($0 as NSString).appendingPathComponent($1) }
+  }
+
   static let home = NSHomeDirectory()
 }
 

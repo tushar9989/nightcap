@@ -150,6 +150,8 @@ final class Engine {
   let maker = SubtitleMaker()
   let names = ShowNames()
   let fixes = JsonStore(Paths.data("subs-corrections.json"), defaults: LineFixLog())
+  /// Whether videos have finished arriving (downloads in progress are left alone).
+  let completeness = Completeness()
   private(set) var analyzer: Analyzer!
   private(set) var onlineSubs: OnlineSubs!
   private(set) var trickplay: Trickplay!
@@ -176,17 +178,75 @@ final class Engine {
     titles = Engine.byId(library.titles)
     analyzer = Analyzer(
       getLibrary: { [unowned self] in self.library }, media: media,
-      isEnabled: { [unowned self] in self.config.data.settings.analysis })
+      isEnabled: { [unowned self] in self.config.data.settings.analysis },
+      arrival: { [unowned self] in self.completeness.state($0) })
     onlineSubs = OnlineSubs(getTitle: { [unowned self] in self.titles[$0] }, media: media)
     trickplay = Trickplay(
       getLibrary: { [unowned self] in self.library }, getLoose: { [unowned self] in self.loose }, media: media,
-      isEnabled: { [unowned self] in self.config.data.settings.previews })
+      isEnabled: { [unowned self] in self.config.data.settings.previews },
+      isComplete: { [unowned self] in self.completeness.isComplete($0) },
+      isActive: { [unowned self] in self.inUse($0) })
     stills = Stills(trickplay: { [weak self] in self?.trickplay }, markers: { [weak self] in self?.analyzer.markers($0) })
     analyzer.onChange = { [weak self] in self?.onChange?() }
     trickplay.onChange = { [weak self] in
       self?.onChange?()
       self?.sweepStills()
     }
+    completeness.onChange = { [weak self] in self?.completenessChanged() }
+    completeness.onStale = { [weak self] in self?.scanSoon() }
+  }
+
+  // ---- Videos still arriving, and the cache -----------------------------------------------
+
+  private var resyncTask: Task<Void, Never>?
+  private var soonScan: Task<Void, Never>?
+  private var lastExpiry: Int64 = 0
+
+  /// Videos were found complete (or not), or their quiet time is up: what
+  /// waits for them is looked at again (once for many at a time).
+  private func completenessChanged() {
+    guard resyncTask == nil, !stopped else { return }
+    resyncTask = Task { [weak self] in
+      await sleep(seconds: 1)
+      guard let self, !self.stopped else { return }
+      self.resyncTask = nil
+      self.analyzer.sync()
+      self.trickplay.sync()
+      self.sweepStills()
+      self.onChange?()
+    }
+  }
+
+  /// A video changed since the last scan (a download in progress): scans in a
+  /// minute, so its size and time are known when it stops changing.
+  private func scanSoon() {
+    guard soonScan == nil, !stopped else { return }
+    soonScan = Task { [weak self] in
+      await sleep(seconds: 60)
+      guard let self, !self.stopped else { return }
+      self.soonScan = nil
+      self.requestScan()
+    }
+  }
+
+  /// Titles whose previews are made in the background: added, or watched, in
+  /// the time the cache keeps things. Others' are made when asked for.
+  func inUse(_ t: Title) -> Bool {
+    let since = nowMs() - Cache.keepMs
+    if t.addedAt >= since { return true }
+    let files = progress.data.files
+    return t.seasons.contains { s in s.episodes.contains { (files[$0]?.updatedAt ?? 0) >= since } }
+  }
+
+  /// Removes what the cache hasn't used for `Cache.keepMs` (at most twice a day).
+  private func expireCaches() {
+    let now = nowMs()
+    guard now - lastExpiry > Cache.dayMs / 2 else { return }
+    lastExpiry = now
+    trickplay.expire()
+    stills.expire()
+    media.expire()
+    analyzer.expire()
   }
 
   private static func byId(_ titles: [Title]) -> [String: Title] {
@@ -208,6 +268,7 @@ final class Engine {
         await sleep(seconds: Engine.rescanEvery)
         guard !Task.isCancelled, let self else { return }
         await self.rescan()
+        self.expireCaches()
       }
     }
   }
@@ -222,6 +283,7 @@ final class Engine {
     progress.flush()
     libraryStore.flush()
     analyzer.flush()
+    completeness.flush()
     onlineSubs.flush()
     subsync.flush()
     names.flush()
@@ -265,12 +327,19 @@ final class Engine {
         libraryStore.data = lib
         libraryStore.save()
         logLine("[scan] \(lib.titles.count) titles, \(lib.files.count) videos (\(nowMs() - t0) ms)")
+        // An unplugged drive must not cost what is known about its videos.
+        if lib.folderStatus.values.allSatisfy(\.online) {
+          let all = Array(lib.files.values) + loose.values
+          media.prune(keeping: Set(all.map(\.id)))
+          completeness.prune(keeping: Set(all.map(sigHash)))
+        }
         analyzer.sync()
         trickplay.sync()
         sweepStills()
         warmProbes()
       } while scanAgain
       scanTask = nil
+      expireCaches()
       onChange?()
     }
     scanTask = task
@@ -828,7 +897,10 @@ final class Engine {
     {
       return pic
     }
-    guard let f = library.files[type == "backdrop" ? eps[eps.count / 2] : eps[0]] else { return nil }
+    // A frame of an episode that has finished arriving (that one, else the first that has).
+    let preferred = type == "backdrop" ? eps[eps.count / 2] : eps[0]
+    guard let f = ([preferred] + eps).lazy.compactMap({ self.library.files[$0] }).first(where: { self.completeness.isComplete($0) })
+    else { return nil }
     return Engine.existing(await media.frameThumb(f, at: type == "backdrop" ? 0.42 : 0.3, width: w))
   }
 
@@ -838,6 +910,8 @@ final class Engine {
     if let thumb = f.thumb { return Engine.existing(thumb) }
     let w = Engine.pickWidth(width)
     if let pic = await stills.picture(f, shape: .card, width: w) { return pic }
+    // No frame from a video still arriving (part of it may be missing).
+    guard library.files[f.id] == nil || completeness.isComplete(f) else { return nil }
     return Engine.existing(await media.frameThumb(f, at: 0.3, width: w))
   }
 
@@ -846,7 +920,9 @@ final class Engine {
     guard !stopped else { return }
     stills.sweep { [weak self] in
       guard let self else { return [] }
-      return self.trickplay.wanted().compactMap { self.library.files[$0] }
+      let wanted = self.trickplay.wanted()
+      let asked = self.stills.asked.filter { !wanted.contains($0) }
+      return (wanted + asked).compactMap { self.library.files[$0] }
     }
   }
 

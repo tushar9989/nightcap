@@ -124,12 +124,21 @@ Everything runs locally; nothing is uploaded.
    (keyframes of the last 20 minutes; dark film scenes are told apart from
    credits by how many visible pixels are dim).
 
-The fingerprints are saved as an **index** (`fingerprints/*.fp` in the data
-folder) and the results in `analysis.json`. Adding an episode only fingerprints that
+The fingerprints are saved as an **index** (`fingerprints/*.fp` in the cache,
+kept while used) and the results in `analysis.json`. Adding an episode only fingerprints that
 episode; the matching for its season then re-runs from the index in
 milliseconds. Changing the matching (bumping `Analyzer.version`) re-matches the
 whole library without decoding anything again (only a longer start for the
 episodes that need one).
+
+**Videos still downloading** (say, a season fetched in order while you watch
+it) are left alone until they are complete: they play, but get no detection,
+previews or pictures, since those would be made from part of the file (credits
+found where the download has got to) and made again as it grows. A video
+counts as complete once it has not changed for 5 minutes, has packets near the
+end of its duration, and has no stretch of zeros in its body (where a download
+set space aside but hasn't filled it). A season is analysed with the episodes
+complete so far, and again as more arrive.
 
 On *The X-Files* (201 episodes, DVD rips): intros found in 200 (the miss is the
 Pilot, which has no title sequence); end credits in 198, checked against the
@@ -256,15 +265,25 @@ Character names from [TVmaze](https://www.tvmaze.com) (CC BY-SA).
 
 Stored in `~/Library/Application Support/Nightcap`: `config.json` (folders,
 settings), `progress.json` (watch progress), `library.json` (last scan),
-`analysis.json` + `fingerprints/` (detection index), `opensubtitles.json`
-(API key and sign-in token, readable by you only), `trickplay/` (preview
-thumbnails), `stills/` (the frames chosen as pictures), `subs-downloaded/` +
-`subs-downloaded.json`, `subsync.json` (timing corrections), `names.json`
-(names looked up on TVmaze, kept 30 days, and the names learned from your
-fixes), `subs-corrections.json` (every fix to made subtitles: the line
-before and after), `probe.json`,
-`thumbs/`, `subs/` (caches), `nightcap.log`. Quit Nightcap and delete the
-folder to start fresh. The player's own choices (volume, speed, subtitle
+`analysis.json` (intros and credits found, and your corrections),
+`opensubtitles.json` (API key and sign-in token, readable by you only),
+`subs-downloaded/` + `subs-downloaded.json` (subtitles downloaded or made on
+this Mac), `subsync.json` (timing corrections), `names.json` (names looked up
+on TVmaze, dropped after 30 days, and the names learned from your fixes),
+`subs-corrections.json` (every fix to made subtitles: the line before and
+after), `nightcap.log`. Quit Nightcap and delete the folder to start fresh.
+
+What Nightcap makes and can make again is in **`~/Library/Caches/Nightcap`**,
+the place macOS keeps for such files: `trickplay/` (preview thumbnails),
+`stills/` (the frames chosen as pictures, and pictures cut from them),
+`thumbs/` (frames for cards), `subs/` (subtitles inside videos, as WebVTT),
+`fingerprints/` (the detection index), `probe.json` (what is inside each
+video) and `complete.json` (which videos have finished arriving). Each item
+is removed after 30 days unused (using it, by showing or playing, keeps it),
+and anything missing is made again when needed, so the folder can be emptied
+at any time. Previews are made ahead only for shows and films added or watched
+in the last 30 days; others' when you open them. Versions before 0.9.7 kept
+these files in Application Support; the first launch moves them. The player's own choices (volume, speed, subtitle
 track and timing nudges, picture) are kept in the app's preferences.
 
 Earlier versions (a Node engine) kept the same files in this repository's
@@ -309,6 +328,8 @@ mac/
     SubSync.swift       subtitle-to-dialogue sync (words heard, or speech activity + correlation)
     Subtext.swift       subtitle text: SRT -> WebVTT, advert removal, retiming
     TrackChoice.swift   each show's audio track and subtitles, found again in its other episodes
+    Cache.swift         the cache folder: what the app makes, kept while used, removed after 30 days unused
+    Complete.swift      whether a video has finished arriving (downloads in progress are left alone)
     Trickplay.swift     preview thumbnail sheets (seek bar, episode previews)
     Stills.swift        pictures for titles and episodes, chosen from their previews (Vision)
     Models.swift, Util.swift, JS.swift, JSDate.swift, Language.swift, FFTTables.swift, fdlibm.c

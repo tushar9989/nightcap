@@ -151,7 +151,7 @@ private struct LibrarySettings: View {
       } header: {
         header("Intros and Credits")
       } footer: {
-        Note("Runs on this Mac. The first and last minutes of each episode are compared with the rest of its season by sound: music they share is the intro or the end credits. Films are checked for text on black. Results are saved, so only new episodes are analysed.")
+        Note("Runs on this Mac. The first and last minutes of each episode are compared with the rest of its season by sound: music they share is the intro or the end credits. Films are checked for text on black. Results are saved, so only new episodes are analysed. Episodes still downloading wait until they are complete.")
       }
 
       Section {
@@ -163,7 +163,7 @@ private struct LibrarySettings: View {
       } header: {
         header("Previews")
       } footer: {
-        Note("A frame every few seconds of each episode and film, shown above the seek bar, when you rest the pointer on an episode, and for the next episode at the end credits.")
+        Note("A frame every few seconds of each episode and film, shown above the seek bar, when you rest the pointer on an episode, and for the next episode at the end credits. Made ahead for shows and films added or watched in the last \(Cache.keepDays) days, for others when you open them, and not for videos still downloading. Kept in ~/Library/Caches/Nightcap with the app's other made files, each removed after \(Cache.keepDays) days unused.")
       }
 
       if !lib.ffmpeg {
