@@ -80,6 +80,33 @@ private func scan(_ root: String, _ kind: String = "auto") -> [TitleDesc] {
     try expectEqual(titles.map { "\($0.kind) \($0.name) \($0.seasons.count)" }, ["show Friends 2", "show Frieren 1"])
   }
 
+  t.test("episodes numbered only at the end of the name") {
+    let f = "Fullmetal ALchemist BrotherHood[Blu Ray] [Dual-Audio]"
+    let root = tree(
+      ["01", "02", "03", "10", "64"].map { "\(f)/Fullmetal Alchemist BrotherHood \($0).mkv" } + ["\(f)/Torrent downloaded from Demonoid.com.txt"])
+    let expected = [
+      TitleDesc(
+        kind: "show", name: "Fullmetal Alchemist BrotherHood", year: nil,
+        seasons: [SeasonDesc("Season 1", ["Episode 1", "Episode 2", "Episode 3", "Episode 10", "Episode 64"])])
+    ]
+    // Added as the library folder, and inside one.
+    try expectEqual(scan(join(root, f)), expected)
+    try expectEqual(scan(root), expected)
+    let lib = Scanner.scanLibrary([Folder(id: "f", path: join(root, f), kind: "auto", addedAt: 0)])
+    try expectEqual(lib.titles[0].seasons[0].episodes.map { lib.files[$0]!.number }, [1, 2, 3, 10, 64])
+    try expectEqual(lib.files[hashId(join(root, f, "Fullmetal Alchemist BrotherHood 10.mkv"))]?.number, 10)
+  }
+
+  t.test("a number at the end alone doesn't make a show") {
+    let root = tree([
+      "Downloads/Some Show 01.mkv", "Downloads/Some Show 02.mkv", "Downloads/Some Show 03.mkv", "Downloads/Ocean's 11.mkv",
+      "Downloads/Rocky 2.mkv", "Saw/Saw 2.mkv", "Saw/Saw 3.mkv",
+    ])
+    try expectEqual(
+      scan(root).map { "\($0.kind) \($0.name) \($0.seasons.map(\.episodes.count))" },
+      ["movie Ocean's 11 [1]", "movie Rocky 2 [1]", "movie Saw 2 [1]", "movie Saw 3 [1]", "show Some Show [3]"])
+  }
+
   t.test("movies folder: one title per film, extras ignored") {
     let root = tree(["Inception (2010)/Inception.2010.1080p.BluRay.x264.mkv", "Inception (2010)/Featurettes/Making of.mkv", "The.Matrix.1999.1080p.mkv"])
     let titles = scan(root)

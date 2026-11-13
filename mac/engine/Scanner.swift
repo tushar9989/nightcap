@@ -313,6 +313,38 @@ enum Scanner {
     return cleanTitle(m[1]!)
   }
 
+  /// "Fullmetal Alchemist BrotherHood 18": a name, then a number at the end.
+  private static let trailingNumberRe = Re(#"^(.*[a-z].*?)[\s._\-]+([0-9]{1,3})(?:v[0-9])?$"#, "i")
+
+  /// Videos named alike but for a number at the end ("Show 01", "Show 02", "Show 03"):
+  /// episodes of a show named by the shared part. At least three with different
+  /// numbers, so a lone "Ocean's 11" or "Rocky 2" stays a film. Keyed by path.
+  struct Runs {
+    var numbers: [String: Int] = [:]
+    var names: [String: String] = [:]
+  }
+
+  static func numberedRuns(_ videos: [Video]) -> Runs {
+    var groups: [String: [(path: String, name: String, n: Int)]] = [:]
+    for v in videos {
+      let stem = stemOf(v.name)
+      if parseEpisode(stem).episode != nil { continue }
+      guard let m = trailingNumberRe.match(cleanTitle(stem)), let n = Int(m[2]!) else { continue }
+      let name = cleanTitle(m[1]!)
+      let key = normName(name)
+      if key.isEmpty { continue }
+      groups[key, default: []].append((v.path, name, n))
+    }
+    var out = Runs()
+    for g in groups.values where g.count >= 3 && Set(g.map(\.n)).count == g.count {
+      for e in g {
+        out.numbers[e.path] = e.n
+        out.names[e.path] = g[0].name
+      }
+    }
+    return out
+  }
+
   private static func sameShow(_ a: String, _ b: String) -> Bool {
     !a.isEmpty && !b.isEmpty && (a.jsIncludes(b) || b.jsIncludes(a))
   }
@@ -322,12 +354,13 @@ enum Scanner {
     let dirs = contentDirs(node).filter { !extrasLabelRe.test($0.name) }
     let seasonDirs = dirs.filter { isSeasonOf($0, node) }
     if !seasonDirs.isEmpty && Double(seasonDirs.count) >= (Double(dirs.count) / 2).rounded(.up) { return true }
-    let eps = node.videos.filter { parseEpisode(stemOf($0.name)).strong }
+    let runs = numberedRuns(node.videos)
+    let eps = node.videos.filter { parseEpisode(stemOf($0.name)).strong || runs.numbers[$0.path] != nil }
     if node.videos.count < 2 || Double(eps.count) < max(2, Double(node.videos.count) * 0.6) { return false }
     // Episodes of this folder's show, not a Downloads folder holding some episodes.
     var owners: [String] = []
     for v in eps {
-      let o = normName(fileShowName(stemOf(v.name)))
+      let o = normName(runs.names[v.path] ?? fileShowName(stemOf(v.name)))
       if !o.isEmpty && !owners.contains(o) { owners.append(o) }
     }
     if owners.isEmpty { return true }
@@ -352,8 +385,10 @@ enum Scanner {
     var showKeys: [String] = []
     var shows: [String: Spec] = [:]
     var out: [Spec] = []
-    for v in videos ?? node.videos {
-      let show = fileShowName(stemOf(v.name))
+    let all = videos ?? node.videos
+    let runs = numberedRuns(all)
+    for v in all {
+      let show = runs.names[v.path] ?? fileShowName(stemOf(v.name))
       if !show.isEmpty {
         let key = normName(show)
         if shows[key] == nil {
@@ -411,6 +446,7 @@ enum Scanner {
       if vids.count > 1 && vids.allSatisfy({ partRe.test(stemOf($0.name)) }) {
         return [Spec(kind: .movie, node: node, videos: vids, named: true)]
       }
+      // (Runs of names numbered at the end are grouped by their name below, not counted here.)
       let numbered = vids.filter { parseEpisode(stemOf($0.name)).episode != nil }.count
       if vids.count > 1 && Double(numbered) >= Double(vids.count) * 0.6 { return [Spec(kind: .show, node: node)] }
       return looseSpecs(node)
@@ -526,7 +562,14 @@ enum Scanner {
 
   private static func buildShow(_ spec: Spec) -> Built {
     let node = spec.node
-    let (name, year) = spec.name.map(parseTitle) ?? showName(node)
+    var (name, year) = spec.name.map(parseTitle) ?? showName(node)
+    // The folder's own videos name the show as the folder does ("Fullmetal ALchemist
+    // BrotherHood[Blu Ray]" holding "Fullmetal Alchemist BrotherHood 01"): the files' spelling.
+    if spec.name == nil,
+      let runName = numberedRuns(node.videos).names.values.sorted().first(where: { normName($0) == normName(name) })
+    {
+      name = parseTitle(runName).name
+    }
     var order: [JSKey] = []
     var seasons: [JSKey: SeasonGroup] = [:]
     func addTo(_ name: String, _ number: Int?, _ label: String, _ poster: String?, _ v: Video) {
@@ -599,7 +642,12 @@ enum Scanner {
   }
 
   private static func sortEpisodes(_ videos: [Video]) -> [(v: Video, p: Episode?)] {
-    var parsed: [(v: Video, p: Episode?)] = videos.map { ($0, parseEpisode(stemOf($0.name))) }
+    let runs = numberedRuns(videos)
+    var parsed: [(v: Video, p: Episode?)] = videos.map { v in
+      let p = parseEpisode(stemOf(v.name))
+      if p.episode == nil, let n = runs.numbers[v.path] { return (v, Episode(season: nil, episode: n, title: "", strong: false)) }
+      return (v, p)
+    }
     if parsed.allSatisfy({ $0.p!.episode != nil }) {
       parsed.stableSort { a, b in
         let d = numCompare(a.p!.episode!, b.p!.episode!)
