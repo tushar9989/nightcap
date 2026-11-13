@@ -531,11 +531,25 @@ private struct TitleHero: View {
             Button(allWatched ? "Mark All as Unwatched" : "Mark All as Watched") {
               Task { app.setProgress(await app.engine.setWatched(main, watched: !allWatched)) }
             }
+            Divider()
+            Button("Detect Intros and Credits") {
+              app.engine.startWork(.detect, titles: [t.id])
+              app.refresh()
+              win.toast("Detecting intros and credits for this title")
+            }
+            .disabled(!app.status.ffmpeg || app.status.work.detect.contains(t.id))
             Button("Detect Intros and Credits Again") {
               _ = app.engine.reanalyze(t.id)
               app.refresh()
               win.toast("Detecting intros and credits again for this title")
             }
+            .disabled(!app.status.ffmpeg)
+            Button("Make Previews") {
+              app.engine.startWork(.previews, titles: [t.id])
+              app.refresh()
+              win.toast("Making previews for this title")
+            }
+            .disabled(!app.status.ffmpeg || app.status.work.previews.contains(t.id))
           } label: {
             Image(systemName: "ellipsis")
           }
@@ -574,17 +588,33 @@ private struct DetectNote: View {
     let detected = all.filter { app.markers($0)?.intro != nil }.count
     let credits = all.filter { app.markers($0)?.credits != nil }.count
     let analysable = t.seasons.filter { !$0.isExtras }.flatMap(\.episodes).count
+    let w = app.status.work
+    let detecting = w.detect.contains(t.id), previewing = w.previews.contains(t.id)
     let working = app.status.analysis.current?.label.jsStartsWith(t.name) ?? false
+    let asked = [detecting ? "detection" : nil, previewing ? "previews" : nil].compactMap { $0 }.joined(separator: " and ")
+    let state =
+      asked.isEmpty ? "" : w.paused ? " · \(asked) paused" : working ? " · detecting now…" : " · \(asked) waiting their turn"
     let text =
       t.isShow
-      ? "Skip Intro ready for \(detected) of \(analysable) episodes · Next Episode at the credits for \(credits)\(working ? " · detecting now…" : "")"
-      : credits > 0
-        ? "End credits found: it counts as watched once they start" : working ? "Looking for the end credits…" : "No end credits found yet"
-    Label(text, systemImage: working ? "waveform" : "checkmark.seal")
-      .font(.app(.callout))
-      .foregroundStyle(.secondary)
-      .lineLimit(1)
-      .help(text)
+      ? "Skip Intro ready for \(detected) of \(analysable) episodes · Next Episode at the credits for \(credits)\(state)"
+      : (credits > 0
+        ? "End credits found: it counts as watched once they start"
+        : working ? "Looking for the end credits…" : "No end credits found yet") + state
+    HStack(spacing: 10) {
+      Label(text, systemImage: working && !w.paused ? "waveform" : "checkmark.seal")
+        .font(.app(.callout))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .help(text)
+      if !asked.isEmpty {
+        Button(w.paused ? "Resume" : "Pause") {
+          app.engine.pauseWork(!w.paused)
+          app.refresh()
+        }
+        .glassButton(large: false)
+        .help(w.paused ? "Go on from where it stopped" : "Stop detection and previews where they are, until you resume")
+      }
+    }
   }
 }
 
@@ -804,7 +834,8 @@ private struct FilmDetails: View {
       }
     }
     .task(id: fid) {
-      app.engine.prioritizePreviews([fid])
+      // Scenes come from the previews: made now if they aren't yet.
+      app.engine.makePreviews([fid])
       // The previews may still be being made: look again for a while.
       for _ in 0..<40 {
         let found = (try? await app.engine.sceneTimes(fid, count: 8)) ?? []

@@ -21,7 +21,8 @@ shows and movies; each title has its own page with seasons and episodes.
   `Show Season 01 Episode 02 - Title`, `1x02`, `[Group] Show - 02`) are parsed;
   films and `Extras` (or `Xtras`) inside a show folder are handled, and a
   spin-off kept there (`Xtras - Baywatch Nights S01`) becomes a show of its
-  own; split shows across drives are merged. Rescans every 15 minutes.
+  own; split shows across drives are merged. Scanned when you ask
+  (**Settings → Library → Scan Now**, or adding or changing a folder).
 - **Resume** – progress is saved every few seconds and on pause; *Watching*
   resumes the episode in progress or the next one.
 - **Skip Intro / Next Episode** – detected per episode (see below), with a
@@ -38,7 +39,14 @@ shows and movies; each title has its own page with seasons and episodes.
   In the player, resting on Next shows the next episode playing its preview,
   and resting on Episodes, Speed or Subtitles opens that menu (a click keeps
   it open).
-  Made locally from keyframes, about a second and 2 MB per episode.
+  Made locally from keyframes, about a second and 2 MB per episode: for the
+  video playing and the one after it, and for the shows you ask for.
+- **Background work only when asked** – detecting intros and credits and
+  making previews start from **Settings → Library** (every show) or a show's
+  page (··· → Detect Intros and Credits, Make Previews). **Pause** stops the
+  work where it is (the ffmpeg running is stopped, not killed) and **Resume**
+  goes on from there, also after quitting. Episodes still downloading are
+  left until they are complete, and the work asked for waits for them.
 - **A sharper picture** – standard-definition video (DVD rips, up to 960
   pixels a side) is doubled as it plays by Apple's super resolution, built
   into macOS 26 (VideoToolbox's low-latency scaler, about 1.5 ms a frame on an
@@ -281,8 +289,7 @@ the place macOS keeps for such files: `trickplay/` (preview thumbnails),
 video) and `complete.json` (which videos have finished arriving). Each item
 is removed after 30 days unused (using it, by showing or playing, keeps it),
 and anything missing is made again when needed, so the folder can be emptied
-at any time. Previews are made ahead only for shows and films added or watched
-in the last 30 days; others' when you open them. Versions before 0.9.7 kept
+at any time. Versions before 0.9.7 kept
 these files in Application Support; the first launch moves them. The player's own choices (volume, speed, subtitle
 track and timing nudges, picture) are kept in the app's preferences.
 

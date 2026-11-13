@@ -389,10 +389,71 @@ final class Children: @unchecked Sendable {
 /// (what the analysis worker kept, so frame times stay in step with frames).
 /// `timeout` (seconds) kills it; `background` lowers its priority so playback
 /// stays smooth. `onStdout` streams stdout instead of collecting it.
+/// Pausing the background work (detection, previews, stills, checks of
+/// downloads) midway: the tools running are stopped where they are
+/// (SIGSTOP) and continue on resume (SIGCONT); new ones wait to start.
+final class WorkPause: @unchecked Sendable {
+  static let shared = WorkPause()
+  private let lock = NSLock()
+  private var paused = false
+  private var pids = Set<pid_t>()
+  private var waiting: [CheckedContinuation<Void, Never>] = []
+
+  var isPaused: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return paused
+  }
+
+  func set(_ on: Bool) {
+    lock.lock()
+    guard on != paused else { return lock.unlock() }
+    paused = on
+    let all = pids
+    let resume = on ? [] : waiting
+    if !on { waiting = [] }
+    lock.unlock()
+    for pid in all { kill(pid, on ? SIGSTOP : SIGCONT) }
+    for c in resume { c.resume() }
+  }
+
+  /// Returns at once unless paused; then when resumed.
+  func wait() async {
+    await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+      lock.lock()
+      if paused {
+        waiting.append(c)
+        lock.unlock()
+      } else {
+        lock.unlock()
+        c.resume()
+      }
+    }
+  }
+
+  /// A pausable tool started: stopped at once if a pause came meanwhile.
+  func add(_ pid: pid_t) {
+    lock.lock()
+    pids.insert(pid)
+    let stop = paused
+    lock.unlock()
+    if stop { kill(pid, SIGSTOP) }
+  }
+
+  func remove(_ pid: pid_t) {
+    lock.lock()
+    pids.remove(pid)
+    lock.unlock()
+  }
+}
+
+/// `pausable`: background work that WorkPause holds (waits to start, stops
+/// midway); its `timeout` counts only the time it runs.
 func runTool(
-  _ cmd: String, _ args: [String], timeout: Double = 0, background: Bool = false,
+  _ cmd: String, _ args: [String], timeout: Double = 0, background: Bool = false, pausable: Bool = false,
   maxErr: Int = 1_000_000, errHead: Bool = false, onStdout: ((Data) -> Void)? = nil
 ) async throws -> RunResult {
+  if pausable { await WorkPause.shared.wait() }
   let p = Process()
   p.executableURL = URL(fileURLWithPath: cmd)
   p.arguments = args
@@ -419,6 +480,7 @@ func runTool(
     }
     let pid = p.processIdentifier
     Children.shared.add(pid)
+    if pausable { WorkPause.shared.add(pid) }
     if background { setpriority(PRIO_PROCESS, id_t(pid), 10) }
     DispatchQueue.global(qos: .utility).async {
       let h = out.fileHandleForReading
@@ -443,15 +505,23 @@ func runTool(
       }
       group.leave()
     }
-    var timer: DispatchWorkItem?
+    var timer: DispatchSourceTimer?
     if timeout > 0 {
-      let t = DispatchWorkItem { kill(pid, SIGKILL) }
+      // Once a second; time paused doesn't count.
+      let t = DispatchSource.makeTimerSource(queue: .global())
+      var ran = 0.0
+      t.schedule(deadline: .now() + 1, repeating: 1)
+      t.setEventHandler {
+        if !pausable || !WorkPause.shared.isPaused { ran += 1 }
+        if ran >= timeout { kill(pid, SIGKILL) }
+      }
+      t.resume()
       timer = t
-      DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: t)
     }
     group.notify(queue: .global()) {
       timer?.cancel()
       Children.shared.remove(pid)
+      if pausable { WorkPause.shared.remove(pid) }
       let code: Int32 = p.terminationReason == .uncaughtSignal ? -1 : p.terminationStatus
       cont.resume(returning: RunResult(code: code, stdout: o.stdout, stderr: String(decoding: o.stderr, as: UTF8.self)))
     }

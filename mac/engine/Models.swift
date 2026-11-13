@@ -151,15 +151,34 @@ struct Settings: Codable, Equatable {
 /// A subtitle language code as OpenSubtitles writes them: "en", "pt-BR".
 let languageCodeRe = Re("^[a-z]{2,3}(?:-[a-z]{2})?$", "i")
 
+/// Background work asked for and not finished (title ids, in the order
+/// asked), and whether it is paused. Nothing is detected or previewed ahead
+/// unless asked for (the player makes previews for what it plays).
+struct WorkRequests: Codable, Equatable {
+  var detect: [String] = []
+  var previews: [String] = []
+  var paused = false
+
+  init() {}
+  init(from d: Decoder) throws {
+    let c = try d.container(keyedBy: CodingKeys.self)
+    detect = (try? c.decodeIfPresent([String].self, forKey: .detect)) ?? []
+    previews = (try? c.decodeIfPresent([String].self, forKey: .previews)) ?? []
+    paused = (try? c.decodeIfPresent(Bool.self, forKey: .paused)) ?? false
+  }
+}
+
 struct Config: Codable {
   var folders: [Folder] = []
   var settings = Settings()
+  var work = WorkRequests()
 
   init() {}
   init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     folders = c.lenientArray(.folders)
     settings = (try? c.decodeIfPresent(Settings.self, forKey: .settings)) ?? Settings()
+    work = (try? c.decodeIfPresent(WorkRequests.self, forKey: .work)) ?? WorkRequests()
   }
 }
 

@@ -139,31 +139,33 @@ private struct LibrarySettings: View {
       } header: {
         header("Folders")
       } footer: {
-        Note("Each subfolder of a show becomes a season. Folders are rescanned every 15 minutes, and your progress is kept even while a drive is unplugged.")
+        Note("Each subfolder of a show becomes a season. Folders are scanned when you press Scan Now or add or change a folder, and your progress is kept even while a drive is unplugged.")
       }
 
       Section {
-        Toggle(isOn: Binding(get: { lib.settings.analysis }, set: { update(SettingsPatch(analysis: $0)) })) {
-          Text("Detect intros and credits")
-          detail("Uses some CPU in the background while new episodes are analysed.")
-        }
-        AnalysisProgress(status: app.status.analysis)
+        WorkRow(
+          kind: .detect, title: "Detect intros and credits in every show",
+          detail: "Only when you ask: here, or for one show from its page (···). Uses some CPU while it runs.")
+        AnalysisProgress(status: app.status.analysis, work: app.status.work)
       } header: {
         header("Intros and Credits")
       } footer: {
-        Note("Runs on this Mac. The first and last minutes of each episode are compared with the rest of its season by sound: music they share is the intro or the end credits. Films are checked for text on black. Results are saved, so only new episodes are analysed. Episodes still downloading wait until they are complete.")
+        Note("Runs on this Mac. The first and last minutes of each episode are compared with the rest of its season by sound: music they share is the intro or the end credits. Films are checked for text on black. Results are saved, so only new episodes are analysed. Episodes still downloading wait until they are complete. Pause stops the work where it is; it goes on from there when you resume, also after quitting.")
       }
 
       Section {
         Toggle(isOn: Binding(get: { lib.settings.previews }, set: { update(SettingsPatch(previews: $0)) })) {
-          Text("Make preview thumbnails")
-          detail("What you open or play is done first. About 2 MB per episode.")
+          Text("Make previews for what you play")
+          detail("The video playing and the one after it. About 2 MB per episode.")
         }
-        PreviewsProgress(status: app.status.previews)
+        WorkRow(
+          kind: .previews, title: "Make previews for every show",
+          detail: "Only when you ask: here, or for one show from its page (···).")
+        PreviewsProgress(status: app.status.previews, work: app.status.work)
       } header: {
         header("Previews")
       } footer: {
-        Note("A frame every few seconds of each episode and film, shown above the seek bar, when you rest the pointer on an episode, and for the next episode at the end credits. Made ahead for shows and films added or watched in the last \(Cache.keepDays) days, for others when you open them, and not for videos still downloading. Kept in ~/Library/Caches/Nightcap with the app's other made files, each removed after \(Cache.keepDays) days unused.")
+        Note("A frame every few seconds of each episode and film, shown above the seek bar, when you rest the pointer on an episode, and for the next episode at the end credits. Made for what you play and what you ask for, never for videos still downloading. Kept in ~/Library/Caches/Nightcap with the app's other made files, each removed after \(Cache.keepDays) days unused.")
       }
 
       if !lib.ffmpeg {
@@ -268,18 +270,65 @@ private struct FolderRow: View {
   }
 }
 
+/// Start for every show, and Pause / Resume while work asked for is left
+/// (one pause for detection and previews: everything running stops).
+private struct WorkRow: View {
+  @Environment(AppModel.self) private var app
+  let kind: Engine.WorkKind
+  let title: String
+  let detail: String
+
+  var body: some View {
+    let w = app.status.work
+    let left = kind == .detect ? w.detect : w.previews
+    HStack(spacing: 10) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title)
+        Text(detail).font(.app(.caption)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+      }
+      Spacer(minLength: 12)
+      if !left.isEmpty {
+        Button(w.paused ? "Resume" : "Pause") {
+          app.engine.pauseWork(!w.paused)
+          app.refresh()
+        }
+        .help(w.paused ? "Go on from where it stopped" : "Stop the work where it is, until you resume")
+      }
+      Button(left.isEmpty ? "Start" : "Add All") {
+        app.engine.startWork(kind)
+        app.refresh()
+      }
+      .disabled(!app.status.ffmpeg || (!left.isEmpty && left.count >= app.lib.titles.count))
+      .help(left.isEmpty ? "Start now" : "Include every show")
+    }
+  }
+}
+
+/// What is left of the work asked for: "2 shows to go · 3 videos still downloading · paused".
+private func workLeft(_ titles: Int, arriving: Int, _ w: WorkStatus, noun: String) -> String {
+  [
+    titles > 0 ? "\(titles) \(titles == 1 ? noun : noun + "s") to go" : nil,
+    arriving > 0 ? "\(arriving) \(arriving == 1 ? "video" : "videos") still downloading" : nil,
+    w.checking > 0 ? "checking \(w.checking) \(w.checking == 1 ? "download" : "downloads")" : nil,
+    titles > 0 && w.paused ? "paused" : nil,
+  ].compactMap { $0 }.joined(separator: " · ")
+}
+
 private struct AnalysisProgress: View {
   let status: Analyzer.Status
+  let work: WorkStatus
 
   var body: some View {
     let a = status
+    let left = workLeft(work.detect.count, arriving: work.detectArriving, work, noun: "title")
+    let done = a.analyzedFiles >= a.totalFiles ? "All \(a.totalFiles) videos analysed" : "\(a.analyzedFiles) of \(a.totalFiles) videos analysed"
     let text =
       !a.available
       ? "Needs ffmpeg."
-      : !a.enabled
-        ? "Paused."
-        : a.current.map { "Analysing \($0.label) (\($0.done)/\($0.total))… \(a.analyzedFiles) of \(a.totalFiles) done" }
-          ?? (a.analyzedFiles >= a.totalFiles ? "All \(a.totalFiles) videos analysed." : "\(a.analyzedFiles) of \(a.totalFiles) analysed.")
+      : work.paused && !work.detect.isEmpty
+        ? "Paused\(a.current.map { " in \($0.label) (\($0.done)/\($0.total))" } ?? "") · \(left)"
+        : a.current.map { "Analysing \($0.label) (\($0.done)/\($0.total))… \(left)" }
+          ?? (left.isEmpty ? "\(done)." : "\(done) · \(left)")
     VStack(alignment: .leading, spacing: 6) {
       ProgressView(value: a.totalFiles != 0 ? Double(a.analyzedFiles) / Double(a.totalFiles) : 0)
       Note(text).lineLimit(1).truncationMode(.middle)
@@ -289,17 +338,21 @@ private struct AnalysisProgress: View {
 
 private struct PreviewsProgress: View {
   let status: Trickplay.Status
+  let work: WorkStatus
 
   var body: some View {
     let p = status
     let bytes = Double(p.bytes)
     let size = bytes >= 1e9 ? "\(toFixed(bytes / 1e9, 1)) GB" : "\(jsNumber(jsRound(bytes / 1e6))) MB"
+    let left = workLeft(work.previews.count, arriving: work.previewsArriving, work, noun: "title")
     let text =
       !p.available
       ? "Needs ffmpeg."
-      : p.current != nil && p.enabled
-        ? "Making previews for \(p.current!)… \(p.done) of \(p.total) done · \(size)"
-        : "\(p.done) of \(p.total) videos have previews · \(size)\(!p.enabled ? " · paused" : "")"
+      : p.current != nil && !work.paused
+        ? "Making previews for \(p.current!)… \(p.done) of \(p.total) asked for · \(size)"
+        : left.isEmpty
+          ? "Previews kept: \(size)"
+          : "\(p.done) of \(p.total) asked for · \(left) · \(size)"
     VStack(alignment: .leading, spacing: 6) {
       ProgressView(value: p.total != 0 ? Double(p.done) / Double(p.total) : 0)
       Note(text).lineLimit(1).truncationMode(.middle)

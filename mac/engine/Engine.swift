@@ -67,10 +67,24 @@ struct LibrarySnapshot {
   var ffmpeg: Bool
 }
 
+/// The background work asked for: what is left, and whether it is paused.
+struct WorkStatus: Equatable {
+  var paused = false
+  /// Titles still to be analysed / previewed, in the order asked.
+  var detect: [String] = []
+  var previews: [String] = []
+  /// Videos of those titles still downloading (they are done when complete).
+  var detectArriving = 0
+  var previewsArriving = 0
+  /// Videos being looked at (whether they have finished arriving).
+  var checking = 0
+}
+
 struct EngineStatus {
   var scanning: Bool
   var analysis: Analyzer.Status
   var previews: Trickplay.Status
+  var work: WorkStatus
   var folderStatus: [String: FolderStatus]
   var ffmpeg: Bool
 }
@@ -136,7 +150,6 @@ final class Engine {
   static let folderKinds = ["auto", "shows", "movies"]
   static let artTypes = ["poster", "backdrop", "card"]
   nonisolated static let artWidths = [320, 480, 800, 1280]
-  static let rescanEvery: Double = 15 * 60
   /// x<N> file next to the video, e<N> embedded track, d<N> downloaded or made here.
   nonisolated static let subIdRe = Re(#"^[xed]\d+$"#)
   nonisolated static let downloadedIdRe = Re(#"^d\d+$"#)
@@ -178,64 +191,151 @@ final class Engine {
     titles = Engine.byId(library.titles)
     analyzer = Analyzer(
       getLibrary: { [unowned self] in self.library }, media: media,
-      isEnabled: { [unowned self] in self.config.data.settings.analysis },
-      arrival: { [unowned self] in self.completeness.state($0) })
+      isEnabled: { true },
+      arrival: { [unowned self] in self.completeness.state($0, check: $1) },
+      requested: { [unowned self] in self.config.data.work.detect })
     onlineSubs = OnlineSubs(getTitle: { [unowned self] in self.titles[$0] }, media: media)
     trickplay = Trickplay(
       getLibrary: { [unowned self] in self.library }, getLoose: { [unowned self] in self.loose }, media: media,
       isEnabled: { [unowned self] in self.config.data.settings.previews },
       isComplete: { [unowned self] in self.completeness.isComplete($0) },
-      isActive: { [unowned self] in self.inUse($0) })
+      requested: { [unowned self] in self.config.data.work.previews })
     stills = Stills(trickplay: { [weak self] in self?.trickplay }, markers: { [weak self] in self?.analyzer.markers($0) })
-    analyzer.onChange = { [weak self] in self?.onChange?() }
+    analyzer.onChange = { [weak self] in
+      self?.onChange?()
+      self?.settleWork()
+    }
     trickplay.onChange = { [weak self] in
       self?.onChange?()
       self?.sweepStills()
+      self?.settleWork()
     }
-    completeness.onChange = { [weak self] in self?.completenessChanged() }
-    completeness.onStale = { [weak self] in self?.scanSoon() }
+    completeness.onChange = { [weak self] in self?.settleWork() }
+    completeness.onStale = { [weak self] in self?.refreshSoon($0) }
+    WorkPause.shared.set(config.data.work.paused)
   }
 
   // ---- Videos still arriving, and the cache -----------------------------------------------
 
-  private var resyncTask: Task<Void, Never>?
-  private var soonScan: Task<Void, Never>?
+  private var settleTask: Task<Void, Never>?
+  private var refreshTask: Task<Void, Never>?
+  private var staleIds: Set<String> = []
   private var lastExpiry: Int64 = 0
+  private var workStatus = WorkStatus()
 
-  /// Videos were found complete (or not), or their quiet time is up: what
-  /// waits for them is looked at again (once for many at a time).
-  private func completenessChanged() {
-    guard resyncTask == nil, !stopped else { return }
-    resyncTask = Task { [weak self] in
+  /// Something the work waits on changed (videos looked at, a season or a
+  /// video done, a download's quiet time up): drops the titles done from what
+  /// was asked for, and queues what can be done now (once for many changes).
+  private func settleWork() {
+    guard settleTask == nil, !stopped else { return }
+    settleTask = Task { [weak self] in
       await sleep(seconds: 1)
       guard let self, !self.stopped else { return }
-      self.resyncTask = nil
+      self.settleTask = nil
       self.analyzer.sync()
       self.trickplay.sync()
       self.sweepStills()
+      self.pruneWork()
       self.onChange?()
     }
   }
 
-  /// A video changed since the last scan (a download in progress): scans in a
-  /// minute, so its size and time are known when it stops changing.
-  private func scanSoon() {
-    guard soonScan == nil, !stopped else { return }
-    soonScan = Task { [weak self] in
-      await sleep(seconds: 60)
+  /// Drops the titles that are done (or gone) from what was asked for, and
+  /// works out what is left (for the status).
+  private func pruneWork() {
+    var w = config.data.work
+    var st = WorkStatus(paused: w.paused, checking: completeness.checkingCount)
+    let arriving = { [unowned self] (f: LibraryFile) in self.completeness.state(f, check: false) != .complete }
+    w.detect = w.detect.filter { id in
+      guard let t = titles[id], let left = analyzer.remaining(t) else { return false }
+      st.detectArriving += left.arriving
+      return true
+    }
+    w.previews = w.previews.filter { id in
+      guard let t = titles[id], let left = trickplay.remaining(t, arriving: arriving) else { return false }
+      st.previewsArriving += left.arriving
+      return true
+    }
+    st.detect = w.detect
+    st.previews = w.previews
+    if w != config.data.work {
+      config.data.work = w
+      config.save()
+    }
+    workStatus = st
+  }
+
+  /// A video being worked on changed since the last scan (a download in
+  /// progress): its size and time in the library are brought up to date in
+  /// half a minute (that video only, no scan), so it counts as complete once
+  /// it stops changing.
+  private func refreshSoon(_ f: LibraryFile) {
+    staleIds.insert(f.id)
+    guard refreshTask == nil, !stopped else { return }
+    refreshTask = Task { [weak self] in
+      await sleep(seconds: 30)
       guard let self, !self.stopped else { return }
-      self.soonScan = nil
-      self.requestScan()
+      self.refreshTask = nil
+      self.refreshStale()
     }
   }
 
-  /// Titles whose previews are made in the background: added, or watched, in
-  /// the time the cache keeps things. Others' are made when asked for.
-  func inUse(_ t: Title) -> Bool {
-    let since = nowMs() - Cache.keepMs
-    if t.addedAt >= since { return true }
-    let files = progress.data.files
-    return t.seasons.contains { s in s.episodes.contains { (files[$0]?.updatedAt ?? 0) >= since } }
+  private func refreshStale() {
+    var changed = false
+    for id in staleIds {
+      guard var f = library.files[id] ?? loose[id] else { continue }
+      var st = stat()
+      guard stat(f.path, &st) == 0 else { continue }
+      let size = Int64(st.st_size), mtime = Scanner.mtimeMs(st)
+      guard size != f.size || mtime != f.mtime else { continue }
+      f.size = size
+      f.mtime = mtime
+      if library.files[id] != nil { library.files[id] = f } else { loose[id] = f }
+      changed = true
+    }
+    staleIds = []
+    guard changed else { return }
+    libraryStore.data = library
+    libraryStore.save()
+    settleWork()
+  }
+
+  // ---- Work asked for --------------------------------------------------------------------
+
+  enum WorkKind: String {
+    case detect, previews
+  }
+
+  /// Detects intros and credits in, or makes previews for, these titles (nil:
+  /// every title, the latest added first), after what was asked before. Starting resumes.
+  func startWork(_ kind: WorkKind, titles ids: [String]? = nil) {
+    let all = ids ?? library.titles.stableSorted(by: { numCompare($1.addedAt, $0.addedAt) }).map(\.id)
+    var w = config.data.work
+    switch kind {
+    case .detect: w.detect += all.filter { !w.detect.contains($0) }
+    case .previews: w.previews += all.filter { !w.previews.contains($0) }
+    }
+    w.paused = false
+    config.data.work = w
+    config.save()
+    WorkPause.shared.set(false)
+    analyzer.sync()
+    trickplay.sync()
+    pruneWork()
+    onChange?()
+  }
+
+  /// Pauses the background work midway (what runs stops where it is), or goes on.
+  func pauseWork(_ paused: Bool) {
+    config.data.work.paused = paused
+    config.save()
+    WorkPause.shared.set(paused)
+    workStatus.paused = paused
+    if !paused {
+      analyzer.kick()
+      trickplay.kick()
+    }
+    onChange?()
   }
 
   /// Removes what the cache hasn't used for `Cache.keepMs` (at most twice a day).
@@ -258,16 +358,21 @@ final class Engine {
   private var periodic: Task<Void, Never>?
   private var stopped = false
 
-  /// Scans now and every 15 minutes.
+  /// Goes on with the work asked for and not finished (unless paused), and
+  /// removes what the cache hasn't used, now and twice a day. Folders are
+  /// scanned only when asked (Scan Now, a folder added or changed).
   func start() {
     guard periodic == nil, !stopped else { return }
     if Tools.ffmpeg == nil { logLine("[engine] ffmpeg not found: intro/credits detection and previews are off") }
-    requestScan()
+    analyzer.sync()
+    trickplay.sync()
+    sweepStills()
+    pruneWork()
+    expireCaches()
     periodic = Task { [weak self] in
       while !Task.isCancelled {
-        await sleep(seconds: Engine.rescanEvery)
+        await sleep(seconds: Double(Cache.dayMs / 2000))
         guard !Task.isCancelled, let self else { return }
-        await self.rescan()
         self.expireCaches()
       }
     }
@@ -397,8 +502,8 @@ final class Engine {
 
   func status() -> EngineStatus {
     EngineStatus(
-      scanning: scanning, analysis: analyzer.status(), previews: trickplay.status(), folderStatus: library.folderStatus,
-      ffmpeg: Tools.ffmpeg != nil)
+      scanning: scanning, analysis: analyzer.status(), previews: trickplay.status(), work: workStatus,
+      folderStatus: library.folderStatus, ffmpeg: Tools.ffmpeg != nil)
   }
 
   func file(_ id: String) throws -> LibraryFile {
@@ -506,8 +611,6 @@ final class Engine {
     if !languageCodeRe.test(s.subtitleLanguage) { s.subtitleLanguage = Settings.systemLanguage }
     config.data.settings = s
     config.save()
-    if s.analysis { analyzer.kick() }
-    trickplay.sync()
     return s
   }
 
@@ -557,14 +660,15 @@ final class Engine {
     } else {
       guard let t = titles[f.titleId] else { throw EngineError("unknown title", 404) }
       let season = f.season >= 0 && f.season < t.seasons.count ? t.seasons[f.season] : nil
+      // Detection asked for this title: this season next.
       analyzer.prioritize(t.id, season?.id)
-      // Previews for this video first, then the episodes after it (Next Episode card).
+      // Previews for this video, then the next one (the Next Episode card); the
+      // rest only when asked for.
       let eps = season?.episodes ?? []
       let i = eps.firstIndex(of: f.id) ?? -1
-      let next = f.season + 1 >= 0 && f.season + 1 < t.seasons.count ? t.seasons[f.season + 1] : nil
-      let nextSeasonStart = next.map { $0.isExtras ? [] : Array($0.episodes.prefix(1)) } ?? []
-      let before = i >= 0 ? Array(eps[..<i]) : Array(eps.dropLast())  // eps.slice(0, i)
-      trickplay.prioritize([f.id] + eps[(i + 1)...] + nextSeasonStart + before)
+      let nextSeason = f.season + 1 >= 0 && f.season + 1 < t.seasons.count ? t.seasons[f.season + 1] : nil
+      let after = i >= 0 && i + 1 < eps.count ? [eps[i + 1]] : nextSeason.map { $0.isExtras ? [] : Array($0.episodes.prefix(1)) } ?? []
+      trickplay.prioritize([f.id] + after)
     }
     let info = await media.probe(f)
     let subtitles = await subtitleTracks(f)
@@ -920,9 +1024,10 @@ final class Engine {
     guard !stopped else { return }
     stills.sweep { [weak self] in
       guard let self else { return [] }
+      // Every video with previews (asked for, or played), those asked for first.
       let wanted = self.trickplay.wanted()
-      let asked = self.stills.asked.filter { !wanted.contains($0) }
-      return (wanted + asked).compactMap { self.library.files[$0] }
+      let have = Set(wanted)
+      return (wanted + self.trickplay.readyIds.filter { !have.contains($0) }).compactMap { self.library.files[$0] }
     }
   }
 
@@ -975,6 +1080,7 @@ final class Engine {
 
   /// Detects a title's intros and credits again.
   func reanalyze(_ titleId: String) -> Analyzer.Status {
+    startWork(.detect, titles: [titleId])
     analyzer.reanalyze(titleId)
     return analyzer.status()
   }
@@ -989,7 +1095,6 @@ final class Engine {
   func previews(_ fileId: String) throws -> PreviewInfo {
     let f = try file(fileId)
     if let m = trickplay.manifest(f) { return .ready(m) }
-    trickplay.prioritize([f.id])
     return .pending(trickplay.state(f))
   }
 
@@ -999,9 +1104,15 @@ final class Engine {
     return path
   }
 
-  /// The episodes someone is looking at get their previews first.
+  /// The episodes someone is looking at get their previews first, if they
+  /// were asked for (nothing more is made).
   func prioritizePreviews(_ fileIds: [String]) {
-    trickplay.prioritize(Array(fileIds.prefix(100)))
+    trickplay.reorder(Array(fileIds.prefix(100)))
+  }
+
+  /// Makes previews for these videos now (a video's scenes were asked for).
+  func makePreviews(_ fileIds: [String]) {
+    trickplay.prioritize(fileIds, asked: true)
   }
 }
 

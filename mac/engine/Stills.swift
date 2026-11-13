@@ -272,9 +272,6 @@ final class Stills {
   /// Videos with no still to be had (no usable frame, the file not there):
   /// not tried again until the app is next started.
   private var failed: Set<String> = []
-  /// Videos whose still was asked for before their previews were made (their
-  /// previews were asked for too): the sweep chooses their stills when the previews come.
-  private(set) var asked: [String] = []
   private var sweeping = false
   private var sweepAgain = false
   private var stopped = false
@@ -317,13 +314,8 @@ final class Stills {
     if let info = saved(base) { return info }
     if let running = picks[f.id] { return await running.value }
     guard !failed.contains(base), let ffmpeg = Tools.ffmpeg else { return nil }
-    guard let (m, sheets) = previews(f) else {
-      // Made when its previews are (if the video is complete and previews are on).
-      if !asked.contains(f.id) { asked.append(f.id) }
-      trickplay()?.prioritize([f.id])
-      return nil
-    }
-    asked.removeAll { $0 == f.id }
+    // Chosen from its previews (made when asked for, or when played).
+    guard let (m, sheets) = previews(f) else { return nil }
     let mk = markers(f.id)
     let task = Task { () -> StillInfo? in
       let info = await limit.run { await choose(f, base: base, manifest: m, sheets: sheets, markers: mk, ffmpeg: ffmpeg) }
@@ -392,7 +384,7 @@ final class Stills {
         [
           "-nostdin", "-hide_banner", "-loglevel", "error", "-skip_frame", "nokey", "-ss", toFixed(start, 2), "-i", f.path, "-t",
           toFixed(end - start, 2), "-map", "0:v:0", "-vf", Stills.squarePixels, "-fps_mode", "passthrough", "-y", join(tmp, "k%03d.png"),
-        ], timeout: 60, background: true)
+        ], timeout: 60, background: true, pausable: true)
       let shots = ((try? FileManager.default.contentsOfDirectory(atPath: tmp)) ?? []).filter { $0.hasSuffix(".png") }.sorted()
         .map { join(tmp, $0) }
       if let info = await Task.detached(priority: .utility, operation: { Stills.keep(shots, pick: pick, base: base, exact: false) }).value {
@@ -407,7 +399,7 @@ final class Stills {
       [
         "-nostdin", "-hide_banner", "-loglevel", "error", "-ss", toFixed(pick.time, 2), "-i", f.path, "-map", "0:v:0", "-vf",
         Stills.squarePixels, "-frames:v", "1", "-y", one,
-      ], timeout: 60, background: true)
+      ], timeout: 60, background: true, pausable: true)
     return await Task.detached(priority: .utility) { Stills.keep([one], pick: pick, base: base, exact: true) }.value
   }
 

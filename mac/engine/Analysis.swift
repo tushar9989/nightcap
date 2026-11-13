@@ -1,7 +1,8 @@
 import Foundation
 
-// Keeps the intro/credits index: decides what needs analysing, works through
-// one season (or movie) at a time in the background, and stores the results.
+// Keeps the intro/credits index: decides what needs analysing in the titles
+// asked for (nothing is analysed unless asked), works through one season (or
+// movie) at a time in the background, and stores the results.
 //
 // On disk:
 //   analysis.json      (data) markers per file, plus manual corrections
@@ -21,9 +22,10 @@ final class Analyzer {
   private let getLibrary: () -> Library
   private let media: Media
   private let isEnabled: () -> Bool
-  /// Whether a video has finished arriving.
-  private let arrival: (LibraryFile) -> Completeness.State
-  private func isComplete(_ f: LibraryFile) -> Bool { arrival(f) == .complete }
+  /// Whether a video has finished arriving (`check`: look at it if not known yet).
+  private let arrival: (LibraryFile, _ check: Bool) -> Completeness.State
+  /// The titles asked to be analysed.
+  private let requested: () -> [String]
   /// Called when results or progress change.
   var onChange: (() -> Void)?
 
@@ -46,12 +48,14 @@ final class Analyzer {
 
   init(
     getLibrary: @escaping () -> Library, media: Media, isEnabled: @escaping () -> Bool,
-    arrival: @escaping (LibraryFile) -> Completeness.State = { _ in .complete }
+    arrival: @escaping (LibraryFile, Bool) -> Completeness.State = { _, _ in .complete },
+    requested: @escaping () -> [String] = { [] }
   ) {
     self.getLibrary = getLibrary
     self.media = media
     self.isEnabled = isEnabled
     self.arrival = arrival
+    self.requested = requested
   }
 
   /// Removes the fingerprints not used for `Cache.keepMs`.
@@ -61,10 +65,11 @@ final class Analyzer {
 
   /// Each season of a show (and each movie) is analysed as one group, because
   /// episodes are compared with their neighbours in the same season.
-  /// Only videos that have finished arriving count (a season with none has no work).
-  func groups(_ title: Title) -> [Group] {
+  /// Only videos that have finished arriving count (a season with none has no
+  /// work); `check`: look at the videos not known yet (for work asked for).
+  func groups(_ title: Title, check: Bool = true) -> [Group] {
     let lib = getLibrary()
-    let complete = { (id: String) -> Bool in lib.files[id].map { self.isComplete($0) } ?? false }
+    let complete = { (id: String) -> Bool in lib.files[id].map { self.arrival($0, check) == .complete } ?? false }
     if title.kind == "movie" {
       return [Group(key: title.id, titleId: title.id, kind: "movie", label: title.name, fileIds: title.seasons.flatMap(\.episodes).filter(complete), refs: [])]
     }
@@ -106,14 +111,15 @@ final class Analyzer {
     }
   }
 
-  /// Queue everything that is new or changed. Recently added titles go first.
+  /// Queues what is new or changed in the titles asked for, in the order asked.
   /// A title some of whose videos are still being looked at (Completeness)
   /// waits for them: its seasons would otherwise be analysed short of them.
   func sync() {
     let lib = getLibrary()
     var wanted: [Group] = []
-    for t in lib.titles.stableSorted(by: { numCompare($1.addedAt, $0.addedAt) }) {
-      let checking = t.seasons.contains { s in s.episodes.contains { lib.files[$0].map { arrival($0) == .checking } ?? false } }
+    let byId = Dictionary(lib.titles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+    for t in requested().compactMap({ byId[$0] }) {
+      let checking = t.seasons.contains { s in s.episodes.contains { lib.files[$0].map { arrival($0, true) == .checking } ?? false } }
       if checking { continue }
       for g in groups(t) where needsWork(g) { wanted.append(g) }
     }
@@ -128,6 +134,22 @@ final class Analyzer {
     // An unplugged drive must not cost its index; only tidy up when every folder is reachable.
     if lib.folderStatus.values.allSatisfy(\.online) { cleanup(Set(lib.files.keys)) }
     kick()
+  }
+
+  /// What a title asked for still waits on: seasons to analyse (now, queued,
+  /// or once its videos have been looked at), and videos still arriving.
+  /// Nil when it is done.
+  func remaining(_ t: Title) -> (seasons: Int, arriving: Int)? {
+    let lib = getLibrary()
+    let eps = t.kind == "movie" ? t.seasons.flatMap(\.episodes) : t.seasons.filter { !$0.isExtras }.flatMap(\.episodes)
+    let states = eps.compactMap { lib.files[$0].map { arrival($0, false) } }
+    let arriving = states.filter { $0 == .arriving }.count
+    let checking = states.contains(.checking)
+    var seasons = Set(queue.filter { $0.titleId == t.id }.map(\.key))
+    if let c = current?.group, c.titleId == t.id { seasons.insert(c.key) }
+    if !checking { for g in groups(t, check: false) where needsWork(g) { seasons.insert(g.key) } }
+    if seasons.isEmpty && arriving == 0 && !checking { return nil }
+    return (max(seasons.count, checking ? 1 : 0), arriving)
   }
 
   /// Move a title (or one season of it) to the front of the queue.
@@ -152,7 +174,7 @@ final class Analyzer {
   /// arriving: they may have been found in part of it), or set by hand.
   func markers(_ fileId: String) -> Markers {
     // (While being looked at, what was found before stays.)
-    let arriving = getLibrary().files[fileId].map { arrival($0) == .arriving } ?? false
+    let arriving = getLibrary().files[fileId].map { arrival($0, false) == .arriving } ?? false
     let auto = arriving ? nil : store.data.files[fileId]
     let manual = store.data.manual[fileId] ?? ManualEntry()
     var intro = auto?.intro, credits = auto?.credits
@@ -205,12 +227,13 @@ final class Analyzer {
   }
 
   func status() -> Status {
+    // Every episode (not extras) and film part, analysed or not, arrived or not.
     var total = 0, done = 0
-    for t in getLibrary().titles {
-      for g in groups(t) {
-        total += g.fileIds.count
-        done += g.fileIds.filter { store.data.files[$0]?.v == Analyzer.version }.count
-      }
+    let lib = getLibrary()
+    for t in lib.titles {
+      let eps = (t.kind == "movie" ? t.seasons : t.seasons.filter { !$0.isExtras }).flatMap(\.episodes).filter { lib.files[$0] != nil }
+      total += eps.count
+      done += eps.filter { store.data.files[$0]?.v == Analyzer.version }.count
     }
     return Status(
       available: Tools.ffmpeg != nil, enabled: isEnabled(), totalFiles: total, analyzedFiles: done, queuedGroups: queue.count,
@@ -353,7 +376,7 @@ struct AnalysisJob: Sendable {
     var args = ["-nostdin", "-hide_banner", "-loglevel", "error"]
     if start > 0 { args += ["-ss", toFixed(start, 3)] }
     args += ["-t", toFixed(len, 3), "-i", f.path, "-map", "0:a:0", "-vn", "-sn", "-dn", "-ac", "1", "-ar", String(FP.sampleRate), "-f", "f32le", "pipe:1"]
-    let r = try await runTool(ffmpeg, args, background: true, maxErr: 20000, errHead: true)
+    let r = try await runTool(ffmpeg, args, background: true, pausable: true, maxErr: 20000, errHead: true)
     if r.code != 0 {
       if AnalysisJob.noStreams.test(r.stderr) { return [] }
       throw Failure(message: "audio decode failed: \(r.lastErrorLine)")
@@ -403,7 +426,7 @@ struct AnalysisJob: Sendable {
       "-ss", toFixed(start, 3), "-t", toFixed(len, 3), "-i", f.path, "-map", "0:v:0", "-an", "-sn", "-dn",
       "-vf", "\(fps > 0 ? "fps=\(fps)," : "")scale=\(W):\(H):flags=area,format=gray,showinfo", "-fps_mode", "passthrough", "-f", "rawvideo", "pipe:1",
     ]
-    let r = try await runTool(ffmpeg, args, background: true, maxErr: 8_000_000, errHead: true)
+    let r = try await runTool(ffmpeg, args, background: true, pausable: true, maxErr: 8_000_000, errHead: true)
     if r.code != 0 { return nil }
     let times = AnalysisJob.showinfoRe.matches(r.stderr).map { start + jsNumberValue($0[1]!) }
     let n = min(times.count, r.stdout.count / (W * H))

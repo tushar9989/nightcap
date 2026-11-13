@@ -5,9 +5,9 @@ import Foundation
 // decoded, so a 45-minute episode takes about a second.
 //
 // On disk: the cache's trickplay/<fileId>-<sigHash>/{index.json, sheet-<n>.jpg}.
-// Made in the background for the titles in use (added or watched lately),
-// and for any video when asked (played, its page open); kept while used
-// (Cache); never made from a video still arriving (Completeness).
+// Made for the titles asked for (Settings, a title's page), and for what the
+// player plays (`isEnabled`: Settings → Previews); nothing else is made ahead.
+// Kept while used (Cache); never made from a video still arriving (Completeness).
 
 @MainActor
 final class Trickplay {
@@ -23,11 +23,12 @@ final class Trickplay {
   /// Videos opened from outside the library: previewed when asked for, kept while open.
   private let getLoose: () -> [String: LibraryFile]
   private let media: Media
+  /// Previews for what the player plays.
   private let isEnabled: () -> Bool
-  /// Whether a video has finished arriving.
+  /// Whether a video has finished arriving (looked at if not known yet).
   private let isComplete: (LibraryFile) -> Bool
-  /// Titles whose previews are made in the background.
-  private let isActive: (Title) -> Bool
+  /// The titles asked for, in the order asked.
+  private let requested: () -> [String]
   /// Called when previews are made or the queue changes.
   var onChange: (() -> Void)?
 
@@ -39,14 +40,14 @@ final class Trickplay {
   init(
     getLibrary: @escaping () -> Library, getLoose: @escaping () -> [String: LibraryFile] = { [:] }, media: Media,
     isEnabled: @escaping () -> Bool, isComplete: @escaping (LibraryFile) -> Bool = { _ in true },
-    isActive: @escaping (Title) -> Bool = { _ in true }
+    requested: @escaping () -> [String] = { [] }
   ) {
     self.getLibrary = getLibrary
     self.getLoose = getLoose
     self.media = media
     self.isEnabled = isEnabled
     self.isComplete = isComplete
-    self.isActive = isActive
+    self.requested = requested
     loadIndex()
   }
 
@@ -110,24 +111,35 @@ final class Trickplay {
     return failed["\(f.id)-\(sigHash(f))"] != nil ? "failed" : "none"
   }
 
-  /// The episodes and movies (not extras) of the titles in use, recently added titles first.
+  /// The episodes and movies (not extras) of the titles asked for, in the order asked.
   func wanted() -> [String] {
     let lib = getLibrary()
+    let byId = Dictionary(lib.titles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     var ids: [String] = []
-    for t in lib.titles.stableSorted(by: { numCompare($1.addedAt, $0.addedAt) }) where isActive(t) {
+    for t in requested().compactMap({ byId[$0] }) {
       for s in t.seasons where !s.isExtras { ids += s.episodes }
     }
     return ids.filter { lib.files[$0] != nil }
   }
 
+  /// The videos of a title asked for still without previews (failures not
+  /// counted), and how many of them are still arriving; nil when none.
+  func remaining(_ t: Title, arriving: (LibraryFile) -> Bool) -> (videos: Int, arriving: Int)? {
+    let lib = getLibrary()
+    let left = t.seasons.filter { !$0.isExtras }.flatMap(\.episodes).compactMap { lib.files[$0] }
+      .filter { manifest($0) == nil && !recentlyFailed($0) }
+    return left.isEmpty ? nil : (left.count, left.filter(arriving).count)
+  }
+
+  /// Video ids with previews.
+  var readyIds: [String] { Array(ready.keys) }
+
   func sync() {
     let lib = getLibrary()
-    if isEnabled() {
-      let queued = Set(queue)
-      for id in wanted() {
-        let f = lib.files[id]!
-        if !queued.contains(id) && current != id && manifest(f) == nil && !recentlyFailed(f) && isComplete(f) { queue.append(id) }
-      }
+    let queued = Set(queue)
+    for id in wanted() {
+      let f = lib.files[id]!
+      if !queued.contains(id) && current != id && manifest(f) == nil && !recentlyFailed(f) && isComplete(f) { queue.append(id) }
     }
     if lib.folderStatus.values.allSatisfy(\.online) { cleanup() }
     kick()
@@ -138,9 +150,10 @@ final class Trickplay {
     return nowMs() - at < Trickplay.retryFailedMs
   }
 
-  /// Put these files at the front of the queue, in this order.
-  func prioritize(_ fileIds: [String]) {
-    guard isEnabled() else { return }
+  /// Put these files at the front of the queue, in this order: what the
+  /// player plays (when previews for it are on), or `asked` for.
+  func prioritize(_ fileIds: [String], asked: Bool = false) {
+    guard asked || isEnabled() else { return }
     let ids = fileIds.filter { id in
       guard let f = file(id) else { return false }
       return manifest(f) == nil && current != id && !recentlyFailed(f) && isComplete(f)
@@ -149,8 +162,15 @@ final class Trickplay {
     kick()
   }
 
+  /// Moves these files to the front of the queue if they are in it (nothing is added).
+  func reorder(_ fileIds: [String]) {
+    let ids = fileIds.filter(queue.contains)
+    guard !ids.isEmpty else { return }
+    queue = ids + queue.filter { !ids.contains($0) }
+  }
+
   func kick() {
-    guard current == nil, Tools.ffmpeg != nil, isEnabled() else { return }
+    guard current == nil, Tools.ffmpeg != nil else { return }
     var next: LibraryFile?
     while !queue.isEmpty {
       let id = queue.removeFirst()
@@ -199,7 +219,7 @@ final class Trickplay {
       let r = try await runTool(ffmpeg, [
         "-nostdin", "-hide_banner", "-loglevel", "error", "-skip_frame", "nokey", "-i", f.path, "-map", "0:v:0", "-an", "-sn", "-dn",
         "-vf", vf, "-q:v", "6", "-start_number", "0", join(tmp, "sheet-%d.jpg"),
-      ], timeout: 15 * 60, background: true)
+      ], timeout: 15 * 60, background: true, pausable: true)
       let names = (Scanner.readdir(tmp) ?? []).map(\.name).filter { Trickplay.sheetName.test($0) }
       return (r, names)
     }.value

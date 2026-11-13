@@ -138,6 +138,39 @@ func cacheTests(_ t: Tests) {
     try expect(fileExists(join(from, "progress.json")), "the user's data stays")
   }
 
+  // ---- Pausing ---------------------------------------------------------------------------------
+
+  t.test("pause: work running stops where it is and goes on; its time limit doesn't run meanwhile; new work waits") {
+    final class Box: @unchecked Sendable { var r: RunResult?; var at: Date? }
+    let started = Date()
+    let a = Box()
+    let running = Task.detached { () in
+      a.r = try? await runTool("/bin/sleep", ["1"], timeout: 2, pausable: true)
+      a.at = Date()
+    }
+    await sleep(seconds: 0.3)
+    WorkPause.shared.set(true)
+    // Started while paused: waits.
+    let b = Box()
+    let waiting = Task.detached { () in
+      b.r = try? await runTool("/bin/echo", ["hi"], pausable: true)
+      b.at = Date()
+    }
+    // Not pausable (the player's, subtitles made when asked): runs.
+    let c = try await runTool("/bin/echo", ["now"])
+    try expectEqual(c.code, 0)
+    await sleep(seconds: 2.5)
+    try expect(a.at == nil, "stopped while paused")
+    try expect(b.at == nil, "not started while paused")
+    WorkPause.shared.set(false)
+    await running.value
+    await waiting.value
+    try expectEqual(a.r?.code, 0, "finished, not killed by its 2 s limit")
+    try expect(a.at!.timeIntervalSince(started) >= 2.7, "paused 2.5 s on the way")
+    try expectEqual(b.r?.code, 0)
+    try expect(b.at! >= a.at!.addingTimeInterval(-1.5), "started after the resume")
+  }
+
   // ---- Videos still arriving -----------------------------------------------------------------
 
   let videos = ensureDir(join(tmp, "arriving"))
@@ -174,7 +207,7 @@ func cacheTests(_ t: Tests) {
     let c = Completeness(store: store)
     var changes = 0, stale = 0
     c.onChange = { changes += 1 }
-    c.onStale = { stale += 1 }
+    c.onStale = { _ in stale += 1 }
     // Just written: not yet.
     let fresh = join(videos, "fresh.mkv")
     try FileManager.default.copyItem(atPath: full, toPath: fresh)
@@ -182,6 +215,8 @@ func cacheTests(_ t: Tests) {
     // Changed since the scan: not complete, and a scan is asked for.
     var old = libraryFile("fresh", fresh)
     old.size -= 1
+    try expectEqual(c.state(old, check: false), .arriving, "changed since the scan")
+    try expectEqual(stale, 0, "only told when checking")
     try expect(!c.isComplete(old), "changed since the scan")
     try expectEqual(stale, 1)
     // Quiet for 10 minutes: looked at, then known.
@@ -189,6 +224,8 @@ func cacheTests(_ t: Tests) {
     setTime(full, quiet)
     setTime(part, quiet)
     let a = libraryFile("full", full), b = libraryFile("part", part)
+    try expectEqual(c.state(a, check: false), .checking, "not known, not looked at unless asked")
+    try expectEqual(c.checkingCount, 0)
     try expect(!c.isComplete(a) && !c.isComplete(b), "being looked at")
     for _ in 0..<200 where changes < 2 { await sleep(seconds: 0.05) }
     try expectEqual(changes, 2, "told when each is known")
@@ -212,9 +249,14 @@ func cacheTests(_ t: Tests) {
       fileOrder: files.map(\.id))
     var arriving: Set<String> = ["cachetestep4"]
     var checking: Set<String> = []
+    var asked: [String] = []
     let an = Analyzer(
       getLibrary: { lib }, media: Media(), isEnabled: { false },
-      arrival: { arriving.contains($0.id) ? .arriving : checking.contains($0.id) ? .checking : .complete })
+      arrival: { f, _ in arriving.contains(f.id) ? .arriving : checking.contains(f.id) ? .checking : .complete },
+      requested: { asked })
+    an.sync()
+    try expect(!an.queue.contains { $0.titleId == "cacheshow" }, "not asked for: nothing queued")
+    asked = ["cacheshow"]
     try expectEqual(an.groups(title).map(\.fileIds), [["cachetestep1", "cachetestep2", "cachetestep3"]])
     let intro = Span(start: 10, end: 60)
     an.store.data.files["cachetestep4"] = AnalysisEntry(v: Analyzer.version, basis: "x", at: 0, intro: intro, credits: nil, method: [:], error: nil)
@@ -224,7 +266,11 @@ func cacheTests(_ t: Tests) {
     try expectEqual(an.markers("cachetestep4").intro, intro, "being looked at: what was found before stays")
     an.sync()
     try expect(!an.queue.contains { $0.titleId == "cacheshow" }, "being looked at: the show waits")
+    try expect(an.remaining(title) != nil, "and isn't done")
     checking = []
+    an.sync()
+    try expect(an.queue.contains { $0.titleId == "cacheshow" }, "asked for, all looked at: queued")
+    try expect(an.remaining(title) != nil, "not done while queued")
     try expectEqual(an.markers("cachetestep4").intro, intro, "complete: shown")
     try expectEqual(an.groups(title).map(\.fileIds), [files.map(\.id)])
     arriving = Set(files.map(\.id))
@@ -232,7 +278,7 @@ func cacheTests(_ t: Tests) {
     an.store.data.files["cachetestep4"] = nil
   }
 
-  t.test("arriving: previews skip videos still arriving; in the background only titles in use") {
+  t.test("arriving: previews skip videos still arriving; made for titles asked for, and what is played") {
     let a = join(videos, "pa.mkv"), b = join(videos, "pb.mkv"), c = join(videos, "pc.mkv")
     for p in [a, b, c] { write(p) }
     let fa = libraryFile("cachetestpa", a, titleId: "used"), fb = libraryFile("cachetestpb", b, titleId: "used")
@@ -245,15 +291,27 @@ func cacheTests(_ t: Tests) {
     let lib = Library(
       titles: [title("used", [fa.id, fb.id]), title("old", [fc.id])], files: [fa.id: fa, fb.id: fb, fc.id: fc], folderStatus: [:],
       scannedAt: 0, fileOrder: [fa.id, fb.id, fc.id])
+    var asked: [String] = []
+    var forPlayer = false
     let tp = Trickplay(
-      getLibrary: { lib }, media: Media(), isEnabled: { true }, isComplete: { $0.id != "cachetestpb" }, isActive: { $0.id == "used" })
-    try expectEqual(tp.wanted(), [fa.id, fb.id], "only the title in use")
+      getLibrary: { lib }, media: Media(), isEnabled: { forPlayer }, isComplete: { $0.id != "cachetestpb" }, requested: { asked })
+    try expectEqual(tp.wanted(), [], "nothing asked for")
+    tp.sync()
+    try expect(tp.queue.isEmpty && tp.current == nil, "nothing made")
+    tp.reorder([fa.id, fc.id])
+    try expect(tp.queue.isEmpty, "looking at a page adds nothing")
+    tp.prioritize([fc.id])
+    try expect(tp.queue.isEmpty && tp.current == nil, "previews for what is played turned off")
+    asked = ["used"]
+    try expectEqual(tp.wanted(), [fa.id, fb.id], "the title asked for")
     tp.sync()
     let taken = tp.queue + (tp.current.map { [$0] } ?? [])
     try expectEqual(taken, [fa.id], "the complete one only")
+    try expect(tp.remaining(lib.titles[0], arriving: { $0.id == "cachetestpb" }) != nil, "not done")
+    forPlayer = true
     tp.prioritize([fb.id, fc.id])
     let after = tp.queue + (tp.current.map { [$0] } ?? [])
-    try expect(!after.contains(fb.id), "asked for, but still arriving")
-    try expect(after.contains(fc.id), "asked for: made though its title isn't in use")
+    try expect(!after.contains(fb.id), "played, but still arriving")
+    try expect(after.contains(fc.id), "played: made though its title wasn't asked for")
   }
 }

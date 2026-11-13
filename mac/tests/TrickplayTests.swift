@@ -26,7 +26,7 @@ import Foundation
       id: "t", kind: "movie", name: "Clip", year: nil, folderIds: [], poster: nil, backdrop: nil, seasons: [season], addedAt: 1)
     let lib = Library(titles: [title], files: [file.id: file], folderStatus: [:], scannedAt: 0, fileOrder: [file.id])
     // The real probe (ffprobe) stands in for the JavaScript test's fake one.
-    let tp = Trickplay(getLibrary: { lib }, media: Media(), isEnabled: { true })
+    let tp = Trickplay(getLibrary: { lib }, media: Media(), isEnabled: { true }, requested: { ["t"] })
     let m = try await tp.generate(file)
     try expectEqual(m.interval, 2, "short videos get a frame every 2 s")
     try expectEqual(m.width, 240)

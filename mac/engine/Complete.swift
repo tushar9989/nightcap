@@ -41,8 +41,9 @@ final class Completeness {
   private var wakeAt: Int64 = .max
   /// Called when a file is found complete or not, or when a file's quiet time is up.
   var onChange: (() -> Void)?
-  /// Called when a file changed since the library was scanned: a scan brings its size and time up to date.
-  var onStale: (() -> Void)?
+  /// Called (when checking) for a file changed since the library was scanned:
+  /// its size and time in the library are to be brought up to date.
+  var onStale: ((LibraryFile) -> Void)?
 
   init(store: JsonStore<CompleteData> = JsonStore(Paths.cache("complete.json"), defaults: CompleteData())) {
     self.store = store
@@ -54,33 +55,38 @@ final class Completeness {
     case complete
     /// Changing, changed lately, not complete, or not there.
     case arriving
-    /// Quiet, and being looked at (`onChange` follows): the first time the
-    /// library is seen, every video is, for a few seconds each.
+    /// Quiet, and not known yet: being looked at (`onChange` follows) when
+    /// asked with `check`, which work asked for does (a few seconds a video).
     case checking
   }
 
-  func state(_ f: LibraryFile) -> State {
+  /// `check`: look at the file if it isn't known yet (work asked for, or the
+  /// player); without, only what is known is told (pages, statuses).
+  func state(_ f: LibraryFile, check: Bool = true) -> State {
     var st = stat()
     guard stat(f.path, &st) == 0 else { return .arriving }
     let mtime = Scanner.mtimeMs(st)
     if Int64(st.st_size) != f.size || mtime != f.mtime {
-      onStale?()
+      if check { onStale?(f) }
       return .arriving
     }
     let now = nowMs()
     // (A time ahead of the clock is taken as quiet.)
     if mtime <= now && now - mtime < Completeness.quietMs {
-      wakeUp(at: mtime + Completeness.quietMs)
+      if check { wakeUp(at: mtime + Completeness.quietMs) }
       return .arriving
     }
     let key = sigHash(f)
     if let e = store.data.files[key] { return e.ok ? .complete : .arriving }
-    check(f, key)
+    if check { self.check(f, key) }
     return .checking
   }
 
-  /// True when `f` has finished arriving.
+  /// True when `f` has finished arriving (looked at if not known yet).
   func isComplete(_ f: LibraryFile) -> Bool { state(f) == .complete }
+
+  /// How many videos are being looked at now.
+  var checkingCount: Int { checking.count }
 
   /// Keeps the results of these file versions (sigHash) only.
   func prune(keeping keys: Set<String>) {
@@ -144,7 +150,7 @@ final class Completeness {
   /// Whether reading from 97 % of the way in finds packets there (the seek
   /// lands on a keyframe before it: up to 30 s, or a fifth of a short video).
   nonisolated static func reachesEnd(_ path: String, ffprobe: String) async -> Bool {
-    guard let r = try? await runTool(ffprobe, ["-v", "error", "-show_entries", "format=duration,start_time", "-of", "json", path], timeout: 60, background: true),
+    guard let r = try? await runTool(ffprobe, ["-v", "error", "-show_entries", "format=duration,start_time", "-of", "json", path], timeout: 60, background: true, pausable: true),
       r.code == 0, let j = JSON.parse(String(decoding: r.stdout, as: UTF8.self)) as? [String: Any],
       let format = j["format"] as? [String: Any],
       let duration = (format["duration"] as? String).flatMap(Double.init), duration > 0
@@ -153,7 +159,7 @@ final class Completeness {
     let from = start + duration * 0.97
     guard let p = try? await runTool(ffprobe, [
       "-v", "error", "-read_intervals", "\(toFixed(from, 3))%+#20", "-show_entries", "packet=pts_time", "-of", "csv=p=0", path,
-    ], timeout: 60, background: true), p.code == 0
+    ], timeout: 60, background: true, pausable: true), p.code == 0
     else { return false }
     let times = String(decoding: p.stdout, as: UTF8.self).split(whereSeparator: \.isNewline)
       .compactMap { Double($0.trimmingCharacters(in: CharacterSet(charactersIn: ", "))) }
