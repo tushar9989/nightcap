@@ -167,7 +167,11 @@ final class PlayerModel {
     defaultsObserver = NotificationCenter.default.addObserver(
       forName: UserDefaults.didChangeNotification, object: nil, queue: .main
     ) { [weak self] _ in
-      MainActor.assumeIsolated { self?.followPicture() }
+      MainActor.assumeIsolated {
+        self?.followPicture()
+        self?.followTune()
+        self?.followLoudness()
+      }
     }
     // The keys go to the player, not to a search field left focused under it.
     win.window?.makeFirstResponder(nil)
@@ -218,6 +222,8 @@ final class PlayerModel {
       guard seq == openSeq else { return }  // switched again meanwhile
       self.info = info
       show = app.titles[info.titleId]?.isShow == true ? info.titleId : nil
+      followTune()
+      followLoudness()
       markers = info.markers
       nextId = app.nextAfter(fid)
       audio = pickAudio(info.probe)
@@ -986,6 +992,19 @@ final class PlayerModel {
   func choosePicture(_ m: PictureMode) {
     Prefs.picture = m
     followPicture()
+  }
+
+  /// The colour Tune Picture chose for the title playing (as it is, if never tuned);
+  /// a tune finishing while it plays shows at once.
+  private func followTune() {
+    let s = info.flatMap { Prefs.pictureTunes[$0.titleId]?.saturation } ?? 1
+    if mp.saturation != s { mp.saturation = s }
+  }
+
+  /// The gain Level Loudness gives the video playing (none, if its title was never measured).
+  private func followLoudness() {
+    let db = info.flatMap { i in Prefs.loudness[i.titleId].map { $0.gain(i.id) } } ?? 0
+    if mp.levelDb != Float(db) { mp.levelDb = Float(db) }
   }
 
   /// Takes up the picture setting when it changed. Playing, the new picture

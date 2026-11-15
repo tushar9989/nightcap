@@ -364,6 +364,17 @@ static int ensure_pool(NCDecoder *d, int w, int h, OSType fmt) {
   return 0;
 }
 
+// Whether SDR video is shown with macOS's own Rec.709 handling (the `appleVideoGamma` setting) rather
+// than a gamma of 2.2. Read once.
+static int apple_video_gamma(void) {
+  static int on = -1;
+  if (on < 0) {
+    Boolean valid = false;
+    on = CFPreferencesGetAppBooleanValue(CFSTR("appleVideoGamma"), kCFPreferencesCurrentApplication, &valid) && valid;
+  }
+  return on;
+}
+
 static void set_color(CVPixelBufferRef pb, AVFrame *f) {
   av_vt_pixbuf_set_attachments(NULL, pb, f);
   if (f->colorspace == AVCOL_SPC_UNSPECIFIED) {
@@ -371,6 +382,28 @@ static void set_color(CVPixelBufferRef pb, AVFrame *f) {
     CFStringRef m = (f->width < 1280 && f->height < 720) ? kCVImageBufferYCbCrMatrix_ITU_R_601_4 : kCVImageBufferYCbCrMatrix_ITU_R_709_2;
     CVBufferSetAttachment(pb, kCVImageBufferYCbCrMatrixKey, m, kCVAttachmentMode_ShouldPropagate);
   }
+  // SDR video (BT.709/601 transfer, or untagged): macOS shows the BT.709 transfer function with a
+  // gamma of about 1.96 (measured on screen), which lifts shadows and washes out mid-tone colour.
+  // Tagged as a plain gamma it is shown as sRGB instead (macOS ignores the level itself;
+  // measured the same for 2.2, 2.4 and 2.8), and the player's curve (VideoGamma) takes it
+  // from there to the display gamma BT.1886 specifies.
+  // `defaults write local.nightcap.app appleVideoGamma -bool YES` restores macOS's handling.
+  // PQ, HLG and other transfers are left as tagged.
+  enum AVColorTransferCharacteristic trc = f->color_trc;
+  if (!apple_video_gamma() && (trc == AVCOL_TRC_UNSPECIFIED || trc == AVCOL_TRC_BT709 || trc == AVCOL_TRC_SMPTE170M ||
+                               trc == AVCOL_TRC_BT2020_10 || trc == AVCOL_TRC_BT2020_12)) {
+    double gamma = 2.2;
+    CFNumberRef g = CFNumberCreate(NULL, kCFNumberDoubleType, &gamma);
+    CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_UseGamma, kCVAttachmentMode_ShouldPropagate);
+    CVBufferSetAttachment(pb, kCVImageBufferGammaLevelKey, g, kCVAttachmentMode_ShouldPropagate);
+    CFRelease(g);
+  } else if (trc == AVCOL_TRC_UNSPECIFIED) {
+    CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, kCVAttachmentMode_ShouldPropagate);
+  }
+  if (f->color_primaries == AVCOL_PRI_UNSPECIFIED)
+    CVBufferSetAttachment(pb, kCVImageBufferColorPrimariesKey,
+      (f->width < 1280 && f->height < 720) ? kCVImageBufferColorPrimaries_SMPTE_C : kCVImageBufferColorPrimaries_ITU_R_709_2,
+      kCVAttachmentMode_ShouldPropagate);
 }
 
 static CVPixelBufferRef to_pixbuf(NCDecoder *d, AVFrame *f) {

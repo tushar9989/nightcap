@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreImage
 import AppKit
 import CoreMedia
 
@@ -46,7 +47,8 @@ final class MediaPlayer: @unchecked Sendable {
   var rate: Float = 1 {
     didSet { send { $0.rate = self.rate } }
   }
-  /// 0...2; above 1 the samples are boosted, with a limiter.
+  /// 0...2; above 1 the samples are boosted, with a limiter: in equal steps of loudness,
+  /// up to +10 dB at 2 (`boostGain`).
   var volume: Float = 1 {
     didSet { applyVolume() }
   }
@@ -82,7 +84,33 @@ final class MediaPlayer: @unchecked Sendable {
   private var shownTime: Double?  // while a seek is landing, the time to report
   private var thread: Thread?
 
+  /// How much colour the picture gets (1: as decoded): the title's Tune Picture
+  /// (PictureTune). Set on the main thread.
+  var saturation: Double = 1 {
+    didSet { if saturation != oldValue { updateFilters() } }
+  }
+  /// The frames shown are SDR tagged with a plain gamma (ncdecoder.c), which macOS shows
+  /// as sRGB: `curve` takes them on to the display gamma wanted (VideoGamma). Main thread.
+  private var curveOn = false {
+    didSet { if curveOn != oldValue { updateFilters() } }
+  }
+  private let curve: CIFilter?
+  /// What the pump thread last saw (curveOn follows it on the main thread).
+  private var frameGammaTagged = false
+
+  private func updateFilters() {
+    var filters: [CIFilter] = []
+    if curveOn, let curve { filters.append(curve) }
+    if saturation != 1, let c = CIFilter(name: "CIColorControls") {
+      c.setValue(saturation, forKey: kCIInputSaturationKey)
+      filters.append(c)
+    }
+    displayLayer.filters = filters.isEmpty ? nil : filters
+  }
+
   init() {
+    VideoGamma.setDisplay(hdrHeadroom: Double(NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1))
+    curve = VideoGamma.curveFilter()
     displayLayer.videoGravity = .resize
     displayLayer.backgroundColor = NSColor.black.cgColor
     audioRenderer.audioTimePitchAlgorithm = .spectral
@@ -206,9 +234,25 @@ final class MediaPlayer: @unchecked Sendable {
     cond.unlock()
   }
 
+  /// This video's loudness levelling (dB, Loudness), applied under the volume.
+  var levelDb: Float = 0 {
+    didSet { if levelDb != oldValue { applyVolume() } }
+  }
+
+  /// At most +16 dB in all (a 200% volume on a levelled quiet video): the limiter holds the rest.
+  private static let maxBoost = powf(10, 16 / 20)
+
   private func applyVolume() {
-    audioRenderer.volume = min(1, max(0, volume))
-    send { $0.gain = max(1, min(2, self.volume)) }
+    let v = max(0, min(2, volume))
+    let linear = min(Self.maxBoost, (v <= 1 ? v : Self.boostGain(v)) * powf(10, levelDb / 20))
+    audioRenderer.volume = min(1, linear)
+    send { $0.gain = max(1, linear) }
+  }
+
+  /// The boost for a volume above 1: +10 dB at 2, about twice as loud (loudness doubles
+  /// with every 10 dB). Doubling the samples (+6 dB) was heard as only about 1.5 times.
+  static func boostGain(_ volume: Float) -> Float {
+    volume <= 1 ? 1 : powf(10, (min(2, volume) - 1) * 10 / 20)
   }
 
   private func main(_ work: @escaping () -> Void) {
@@ -464,6 +508,11 @@ final class MediaPlayer: @unchecked Sendable {
     }
     // A paused picture shown again in another mode waits for the scaler to start.
     let (shown, status) = upscaler.process(pb, mode: picture, wait: landing && paused)
+    let tagged = VideoGamma.isGammaTagged(shown)
+    if tagged != frameGammaTagged {
+      frameGammaTagged = tagged
+      main { self.curveOn = tagged }
+    }
     // From which frame the picture is shown this way (after a seek, from its first).
     if status != reportedPicture || picture != reportedMode || landing {
       reportedPicture = status

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -45,7 +46,17 @@ final class AppModel {
   /// Videos opened together from outside the library, the latest last: Next goes through them in order.
   @ObservationIgnored private var openedRuns: [[String]] = []
 
+  /// Each title's picture as Tune Picture chose it (Prefs.pictureTunes).
+  private(set) var pictureTunes: [String: PictureTune.Result] = Prefs.pictureTunes
+  /// Titles being tuned, and how far each has got.
+  private(set) var tuning: [String: String] = [:]
+  /// Each title's loudness as Level Loudness measured it (Prefs.loudness).
+  private(set) var loudness: [String: Loudness.Result] = Prefs.loudness
+  /// Titles being measured for Level Loudness, and how far each has got.
+  private(set) var levelling: [String: String] = [:]
+
   init() {
+    VideoGamma.setDisplay(hdrHeadroom: Double(NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1))
     engine = Engine()
     lib = engine.snapshot()
     status = engine.status()
@@ -81,6 +92,72 @@ final class AppModel {
       self.refreshTask = nil
       self.refresh()
     }
+  }
+
+  // ---- Tune Picture ----------------------------------------------------------------------------
+
+  /// Tunes the title's picture in the background (low priority, held by Pause like detection):
+  /// frames from episodes across it choose how much colour it gets. `done` gets what came of it.
+  func tunePicture(_ t: Title, done: @escaping @MainActor (String) -> Void) {
+    guard tuning[t.id] == nil else { return }
+    let paths = playOrder(t).compactMap { try? engine.file($0).path }
+    tuning[t.id] = "starting"
+    Task {
+      do {
+        let r = try await PictureTune.tune(paths) { i, n in await self.tuneProgress(t.id, i, n) }
+        tuning[t.id] = nil
+        guard r.frames > 0 else { return done("Could not read frames from \(t.name)") }
+        setPictureTune(t.id, r)
+        done(r.saturation == 1 ? "\(t.name): picture left as it is" : String(format: "%@: colour ×%.2f", t.name, r.saturation))
+      } catch {
+        tuning[t.id] = nil
+        done("Could not tune the picture: \(error)")
+      }
+    }
+  }
+
+  private func tuneProgress(_ titleId: String, _ i: Int, _ n: Int) {
+    if tuning[titleId] != nil { tuning[titleId] = "\(i) of \(n) \(n == 1 ? "video" : "episodes") looked at" }
+  }
+
+  /// Measures the loudness of every video of the title in the background (low priority,
+  /// held by Pause like detection); from then on each plays at the same loudness.
+  func levelLoudness(_ t: Title, done: @escaping @MainActor (String) -> Void) {
+    guard levelling[t.id] == nil else { return }
+    let files = playOrder(t).compactMap { fid in (try? engine.file(fid).path).map { (id: fid, path: $0) } }
+    levelling[t.id] = "starting"
+    Task {
+      do {
+        let r = try await Loudness.level(files) { i, n in await self.levelProgress(t.id, i, n) }
+        levelling[t.id] = nil
+        guard let typical = r.typical else { return done("No sound to measure in \(t.name)") }
+        setLoudness(t.id, r)
+        done(String(format: "%@: levelled to %.0f LUFS (typically %+.1f dB)", t.name, r.target, Loudness.gain(measured: typical, target: r.target)))
+      } catch {
+        levelling[t.id] = nil
+        done("Could not measure the loudness: \(error)")
+      }
+    }
+  }
+
+  private func levelProgress(_ titleId: String, _ i: Int, _ n: Int) {
+    if levelling[titleId] != nil { levelling[titleId] = "\(i) of \(n) measured" }
+  }
+
+  /// Keeps a title's loudness (nil: each video as it is); a player showing it follows.
+  func setLoudness(_ titleId: String, _ r: Loudness.Result?) {
+    var all = Prefs.loudness
+    all[titleId] = r
+    Prefs.loudness = all
+    loudness = all
+  }
+
+  /// Keeps a title's tune (nil: back to the picture as it is); a player showing it follows.
+  func setPictureTune(_ titleId: String, _ r: PictureTune.Result?) {
+    var all = Prefs.pictureTunes
+    all[titleId] = r
+    Prefs.pictureTunes = all
+    pictureTunes = all
   }
 
   func refresh() {

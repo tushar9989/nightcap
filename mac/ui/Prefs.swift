@@ -84,6 +84,30 @@ enum Prefs {
     delays = list
   }
 
+  // ---- Each title's picture, as Tune Picture chose it (PictureTune) ---------------------------
+
+  static var pictureTunes: [String: PictureTune.Result] {
+    get {
+      guard let data = d.data(forKey: "pictureTunes"),
+        let all = try? JSONDecoder().decode([String: PictureTune.Result].self, from: data)
+      else { return [:] }
+      return all
+    }
+    set { d.set(try? JSONEncoder().encode(newValue), forKey: "pictureTunes") }
+  }
+
+  // ---- Each title's loudness, as Level Loudness measured it (Loudness) -------------------------
+
+  static var loudness: [String: Loudness.Result] {
+    get {
+      guard let data = d.data(forKey: "loudness"),
+        let all = try? JSONDecoder().decode([String: Loudness.Result].self, from: data)
+      else { return [:] }
+      return all
+    }
+    set { d.set(try? JSONEncoder().encode(newValue), forKey: "loudness") }
+  }
+
   // ---- Each show's audio and subtitles (TrackChoice), the latest 500 shows ------------------
 
   private static var showTrackList: [ShowTracks] {

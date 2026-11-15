@@ -550,6 +550,32 @@ private struct TitleHero: View {
               win.toast("Making previews for this title")
             }
             .disabled(!app.status.ffmpeg || app.status.work.previews.contains(t.id))
+            Divider()
+            Button(app.pictureTunes[t.id] == nil ? "Tune Picture" : "Tune Picture Again") {
+              app.tunePicture(t) { [weak win] text in win?.toast(text, ms: 4000) }
+              win.toast("Tuning the picture in the background")
+            }
+            .disabled(!app.status.ffmpeg || app.tuning[t.id] != nil)
+            .help("Chooses how much colour this title gets, from frames of its episodes")
+            if app.pictureTunes[t.id] != nil {
+              Button("Picture as It Is") {
+                app.setPictureTune(t.id, nil)
+                win.toast("\(t.name): picture as it is")
+              }
+            }
+            Divider()
+            Button(app.loudness[t.id] == nil ? "Level Loudness" : "Level Loudness Again") {
+              app.levelLoudness(t) { [weak win] text in win?.toast(text, ms: 4000) }
+              win.toast("Measuring the loudness in the background")
+            }
+            .disabled(!app.status.ffmpeg || app.levelling[t.id] != nil)
+            .help("Measures every episode, then plays each at the same loudness")
+            if app.loudness[t.id] != nil {
+              Button("Loudness as It Is") {
+                app.setLoudness(t.id, nil)
+                win.toast("\(t.name): loudness as it is")
+              }
+            }
           } label: {
             Image(systemName: "ellipsis")
           }
@@ -561,6 +587,10 @@ private struct TitleHero: View {
         }
         DetectNote(t: t)
           .padding(.top, 14)
+        TuneNote(t: t)
+          .padding(.top, 6)
+        LoudnessNote(t: t)
+          .padding(.top, 4)
       }
       .padding(.horizontal, m.pad)
       .padding(.bottom, 22)
@@ -575,6 +605,46 @@ private struct TitleHero: View {
       app.titleMeta(t), t.isShow && seasons > 1 ? "\(main.count) episodes" : nil,
       upNext ?? (watchedCount > 0 ? (t.isShow ? "\(watchedCount) watched" : "Watched") : nil),
     ].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+  }
+}
+
+/// What Level Loudness measured for a title, or how far it has got.
+private struct LoudnessNote: View {
+  @Environment(AppModel.self) private var app
+  let t: Title
+
+  var body: some View {
+    if let step = app.levelling[t.id] {
+      Label("Measuring the loudness: \(step)…", systemImage: "speaker.wave.2")
+        .font(.app(.callout)).foregroundStyle(.secondary).lineLimit(1)
+    } else if let r = app.loudness[t.id], let typical = r.typical {
+      let gains = r.files.values.map { Loudness.gain(measured: $0, target: r.target) }
+      let text = String(
+        format: "Loudness levelled to %.0f LUFS · typically %+.1f dB (%+.1f to %+.1f) · %d measured",
+        r.target, Loudness.gain(measured: typical, target: r.target), gains.min() ?? 0, gains.max() ?? 0, r.files.count)
+      Label(text, systemImage: "speaker.wave.2")
+        .font(.app(.callout)).foregroundStyle(.secondary).lineLimit(1)
+        .help(text)
+    }
+  }
+}
+
+/// What Tune Picture chose for a title, or how far it has got.
+private struct TuneNote: View {
+  @Environment(AppModel.self) private var app
+  let t: Title
+
+  var body: some View {
+    if let step = app.tuning[t.id] {
+      Label("Tuning the picture: \(step)…", systemImage: "camera.filters")
+        .font(.app(.callout)).foregroundStyle(.secondary).lineLimit(1)
+    } else if let r = app.pictureTunes[t.id] {
+      let text = (r.saturation == 1 ? "Picture tuned: left as it is" : String(format: "Picture tuned: colour ×%.2f", r.saturation))
+        + " · " + r.reason
+      Label(text, systemImage: "camera.filters")
+        .font(.app(.callout)).foregroundStyle(.secondary).lineLimit(1)
+        .help(text + String(format: " · from %d frames of %d episodes", r.frames, r.episodes))
+    }
   }
 }
 
