@@ -47,4 +47,40 @@ func loudnessTests(_ t: Tests) {
     let r = try await Loudness.level([(id: "a", path: a), (id: "m", path: mute)])
     try expectEqual(r.files.count, 1)
   }
+
+  t.test("loudness: the audio track asked for is measured, and only it is levelled") {
+    // Fullmetal Alchemist: a louder first track (-20.5 LUFS) and a quieter second one (-27.7),
+    // the one played; measuring only the first turned the played one down instead of up.
+    let dir = tempDir("loud2")
+    let two = join(dir, "two.mkv")
+    try await ffmpeg([
+      "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000:duration=20",
+      "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000:duration=20",
+      "-filter_complex", "[0:a]volume=-2dB,pan=stereo|c0=c0|c1=c0[a];[1:a]volume=-10dB,pan=stereo|c0=c0|c1=c0[b]",
+      "-map", "[a]", "-map", "[b]", "-c:a", "flac", two])
+    let first = try await Loudness.level([(id: "two", path: two)], track: 0)
+    let second = try await Loudness.level([(id: "two", path: two)], track: 1)
+    let l0 = try unwrapLoud(first.files["two"]), l1 = try unwrapLoud(second.files["two"])
+    try expect(abs(l0 - -20) < 0.5 && abs(l1 - -28) < 0.5, "\(l0), \(l1)")
+    try expectEqual(second.track, 1)
+    try expect(second.gain("two", track: 1) > 3.5, "the quieter track turned up: \(second.gain("two", track: 1))")
+    try expectEqual(second.gain("two", track: 0), 0, "a track not measured: as it is")
+    try expect(second.gain("new", track: 1) > 3.5, "not measured yet: the title's typical level")
+    let back = try JSONDecoder().decode(Loudness.Result.self, from: try JSONEncoder().encode(second))
+    try expectEqual(back, second)
+  }
+
+  t.test("loudness: a result from before the track was asked measured the first") {
+    let json = #"{"files":{"a":-20,"b":-22},"target":-24,"measuredAt":0}"#
+    let old = try JSONDecoder().decode(Loudness.Result.self, from: Data(json.utf8))
+    try expectEqual(old.measuredTrack, 0)
+    try expectEqual(old.gain("a"), -4)
+    try expectEqual(old.gain("a", track: 1), 0, "another track: left as it is")
+    try expectEqual(old.typical, -21)
+  }
+}
+
+private func unwrapLoud<T>(_ v: T?, file: StaticString = #fileID, line: UInt = #line) throws -> T {
+  guard let v else { throw TestFailure(description: "nil at \(file):\(line)") }
+  return v
 }

@@ -127,6 +127,11 @@ enum Prefs {
     return t
   }
 
+  /// What show `show` plays with, if it has played; nothing is kept by asking.
+  static func savedShowTracks(_ show: String) -> ShowTracks? {
+    showTrackList.last(where: { $0.show == show })
+  }
+
   static func setShowTracks(_ t: ShowTracks) {
     showTrackList = ShowTracks.keep(t, in: showTrackList)
   }

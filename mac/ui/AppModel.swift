@@ -120,19 +120,34 @@ final class AppModel {
     if tuning[titleId] != nil { tuning[titleId] = "\(i) of \(n) \(n == 1 ? "video" : "episodes") looked at" }
   }
 
-  /// Measures the loudness of every video of the title in the background (low priority,
-  /// held by Pause like detection); from then on each plays at the same loudness.
-  func levelLoudness(_ t: Title, done: @escaping @MainActor (String) -> Void) {
+  /// Each title's audio tracks by name ("Japanese", "Track 2"), from one of its videos.
+  private(set) var audioTracks: [String: [String]] = [:]
+
+  /// Reads the title's audio tracks (ffprobe, kept after the first time) for Level Loudness to ask from.
+  func loadAudioTracks(_ t: Title) async {
+    guard audioTracks[t.id] == nil else { return }
+    for fid in playOrder(t).prefix(3) {
+      guard let f = try? engine.file(fid), let p = await engine.media.probe(f) else { continue }
+      audioTracks[t.id] = p.audio.enumerated().map { audioTrackName($1, $0) }
+      return
+    }
+    audioTracks[t.id] = []  // none read: Level Loudness takes the first track, as it can't ask
+  }
+
+  /// Measures audio track `track` of every video of the title in the background (low priority,
+  /// held by Pause like detection); from then on that track plays at the same loudness in each.
+  func levelLoudness(_ t: Title, track: Int, done: @escaping @MainActor (String) -> Void) {
     guard levelling[t.id] == nil else { return }
     let files = playOrder(t).compactMap { fid in (try? engine.file(fid).path).map { (id: fid, path: $0) } }
     levelling[t.id] = "starting"
     Task {
       do {
-        let r = try await Loudness.level(files) { i, n in await self.levelProgress(t.id, i, n) }
+        let r = try await Loudness.level(files, track: track) { i, n in await self.levelProgress(t.id, i, n) }
         levelling[t.id] = nil
         guard let typical = r.typical else { return done("No sound to measure in \(t.name)") }
         setLoudness(t.id, r)
-        done(String(format: "%@: levelled to %.0f LUFS (typically %+.1f dB)", t.name, r.target, Loudness.gain(measured: typical, target: r.target)))
+        let name = (audioTracks[t.id]?.count ?? 0) > 1 ? " " + trackName(t.id, track) : ""
+        done(String(format: "%@%@: levelled to %.0f LUFS (typically %+.1f dB)", t.name, name, r.target, Loudness.gain(measured: typical, target: r.target)))
       } catch {
         levelling[t.id] = nil
         done("Could not measure the loudness: \(error)")
@@ -142,6 +157,17 @@ final class AppModel {
 
   private func levelProgress(_ titleId: String, _ i: Int, _ n: Int) {
     if levelling[titleId] != nil { levelling[titleId] = "\(i) of \(n) measured" }
+  }
+
+  /// The audio track (place among a video's tracks) the title plays with: its show's choice, else the first.
+  func playedTrack(_ titleId: String) -> Int {
+    Prefs.savedShowTracks(titleId)?.audio?.position ?? 0
+  }
+
+  /// An audio track of the title by name, as Level Loudness lists it.
+  func trackName(_ titleId: String, _ track: Int) -> String {
+    if let names = audioTracks[titleId], track < names.count { return names[track] }
+    return "Track \(track + 1)"
   }
 
   /// Keeps a title's loudness (nil: each video as it is); a player showing it follows.

@@ -564,12 +564,28 @@ private struct TitleHero: View {
               }
             }
             Divider()
-            Button(app.loudness[t.id] == nil ? "Level Loudness" : "Level Loudness Again") {
-              app.levelLoudness(t) { [weak win] text in win?.toast(text, ms: 4000) }
+            let levelTitle = app.loudness[t.id] == nil ? "Level Loudness" : "Level Loudness Again"
+            let level = { (track: Int) in
+              app.levelLoudness(t, track: track) { [weak win] text in win?.toast(text, ms: 4000) }
               win.toast("Measuring the loudness in the background")
             }
-            .disabled(!app.status.ffmpeg || app.levelling[t.id] != nil)
-            .help("Measures every episode, then plays each at the same loudness")
+            if let tracks = app.audioTracks[t.id], tracks.count > 1 {
+              // Which audio track to level: asked, not guessed.
+              Menu(levelTitle) {
+                Section("Level which audio track?") {
+                  ForEach(tracks.indices, id: \.self) { i in
+                    Button(tracks[i] + (i == app.playedTrack(t.id) ? " (plays now)" : "")) { level(i) }
+                  }
+                }
+              }
+              .disabled(!app.status.ffmpeg || app.levelling[t.id] != nil)
+              .help("Measures that audio track in every episode, then plays each at the same loudness")
+            } else {
+              // Until the tracks are read, nothing to ask from: wait rather than guess.
+              Button(levelTitle) { level(0) }
+                .disabled(!app.status.ffmpeg || app.levelling[t.id] != nil || app.audioTracks[t.id] == nil)
+                .help("Measures every episode, then plays each at the same loudness")
+            }
             if app.loudness[t.id] != nil {
               Button("Loudness as It Is") {
                 app.setLoudness(t.id, nil)
@@ -584,6 +600,7 @@ private struct TitleHero: View {
           .buttonBorderShape(.circle)
           .fixedSize()
           .help("More")
+          .task(id: t.id) { await app.loadAudioTracks(t) }
         }
         DetectNote(t: t)
           .padding(.top, 14)
@@ -619,11 +636,15 @@ private struct LoudnessNote: View {
         .font(.app(.callout)).foregroundStyle(.secondary).lineLimit(1)
     } else if let r = app.loudness[t.id], let typical = r.typical {
       let gains = r.files.values.map { Loudness.gain(measured: $0, target: r.target) }
+      let several = (app.audioTracks[t.id]?.count ?? 0) > 1
+      let which = several ? " · " + app.trackName(t.id, r.measuredTrack) : ""
+      let other = several && r.measuredTrack != app.playedTrack(t.id)
+        ? " · this show plays " + app.trackName(t.id, app.playedTrack(t.id)) + ", left as it is" : ""
       let text = String(
-        format: "Loudness levelled to %.0f LUFS · typically %+.1f dB (%+.1f to %+.1f) · %d measured",
-        r.target, Loudness.gain(measured: typical, target: r.target), gains.min() ?? 0, gains.max() ?? 0, r.files.count)
+        format: "Loudness levelled to %.0f LUFS%@ · typically %+.1f dB (%+.1f to %+.1f) · %d measured%@",
+        r.target, which, Loudness.gain(measured: typical, target: r.target), gains.min() ?? 0, gains.max() ?? 0, r.files.count, other)
       Label(text, systemImage: "speaker.wave.2")
-        .font(.app(.callout)).foregroundStyle(.secondary).lineLimit(1)
+        .font(.app(.callout)).foregroundStyle(other.isEmpty ? .secondary : .primary).lineLimit(1)
         .help(text)
     }
   }

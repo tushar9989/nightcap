@@ -223,10 +223,10 @@ final class PlayerModel {
       self.info = info
       show = app.titles[info.titleId]?.isShow == true ? info.titleId : nil
       followTune()
-      followLoudness()
       markers = info.markers
       nextId = app.nextAfter(fid)
       audio = pickAudio(info.probe)
+      followLoudness()
       var at = start ?? 0
       if start == nil, let p = app.progress(fid) ?? info.progress {
         let dur = duration
@@ -340,7 +340,10 @@ final class PlayerModel {
 
   private func opened(_ m: MediaPlayer.Info) {
     mediaInfo = m
-    if info?.probe == nil { audio = max(0, m.audioIndex) }
+    if info?.probe == nil {
+      audio = max(0, m.audioIndex)
+      followLoudness()
+    }
     updateNowPlaying()
   }
 
@@ -1001,9 +1004,9 @@ final class PlayerModel {
     if mp.saturation != s { mp.saturation = s }
   }
 
-  /// The gain Level Loudness gives the video playing (none, if its title was never measured).
+  /// The gain Level Loudness gives the audio track playing (none, if its title was never measured).
   private func followLoudness() {
-    let db = info.flatMap { i in Prefs.loudness[i.titleId].map { $0.gain(i.id) } } ?? 0
+    let db = info.flatMap { i in Prefs.loudness[i.titleId].map { $0.gain(i.id, track: audio) } } ?? 0
     if mp.levelDb != Float(db) { mp.levelDb = Float(db) }
   }
 
@@ -1029,6 +1032,7 @@ final class PlayerModel {
       Prefs.setShowTracks(t)
     }
     mp.selectAudio(i)
+    followLoudness()
     spinnerTask?.cancel()
     spinnerTask = Task {
       try? await Task.sleep(nanoseconds: 250_000_000)
