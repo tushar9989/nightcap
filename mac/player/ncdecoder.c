@@ -97,13 +97,16 @@ static enum AVPixelFormat pick_format(AVCodecContext *ctx, const enum AVPixelFor
   return AV_PIX_FMT_NONE;
 }
 
-// Video worth sending to VideoToolbox: HD and up in the codecs it handles.
-// Anything smaller (DVD rips, Xvid, MPEG-2) decodes faster in software, which
-// matters when catching up from a keyframe after a seek.
+// Video worth sending to VideoToolbox: HD and up in HEVC and ProRes, and H.264
+// bigger than 1080p. Anything smaller (DVD rips, Xvid, MPEG-2) decodes faster in
+// software, which matters when catching up from a keyframe after a seek. H.264
+// up to 1080p stays in software too: frames from VideoToolbox flickered with
+// black blocks on screen (720p H.264, 0.9.11), though they read back clean.
 static int wants_hardware(const AVCodecParameters *par) {
   enum AVCodecID id = par->codec_id;
-  return (id == AV_CODEC_ID_H264 || id == AV_CODEC_ID_HEVC || id == AV_CODEC_ID_PRORES) &&
-         par->width * par->height >= 1280 * 720;
+  if (par->width * par->height < 1280 * 720) return 0;
+  if (id == AV_CODEC_ID_HEVC || id == AV_CODEC_ID_PRORES) return 1;
+  return id == AV_CODEC_ID_H264 && par->width * par->height > 1920 * 1088;
 }
 
 static AVCodecContext *open_codec(NCDecoder *d, int idx, int video, char *err, int errlen) {
